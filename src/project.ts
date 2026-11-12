@@ -5,6 +5,7 @@ import { eng } from './engineRef';
 import { estimateDepth, downscale, readExif, DepthResult } from './engine/depth';
 import { reconstruct, Reconstruction } from './engine/reconstruct';
 import { sunAngles, defaultSun } from './engine/sun';
+import { registerExtra, extraLights } from './engine/register';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -55,7 +56,15 @@ export async function loadPhotos(files: File[]) {
     const url = canvas.toDataURL('image/jpeg', 0.9);
     useStore.setState({ photos: [url] });
     const name = main.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
-    await build(canvas, undefined, exif.focal35 || 26, name && !/^(img|dsc|pxl|photo|foto)\s?\d/i.test(name) ? name : 'Nuovo luogo');
+    // foto in più dello stesso luogo (fino a 5)
+    const extras: ExtraIn[] = [];
+    for (const f of images.slice(1, 6)) {
+      try {
+        const ex = readExif(await f.arrayBuffer());
+        extras.push({ canvas: await fileToCanvas(f), focal35: ex.focal35 || exif.focal35 || 26 });
+      } catch { /* foto illeggibile: si salta */ }
+    }
+    await build(canvas, undefined, exif.focal35 || 26, name && !/^(img|dsc|pxl|photo|foto)\s?\d/i.test(name) ? name : 'Nuovo luogo', undefined, extras);
   } catch (e) {
     console.error(e);
     useStore.setState({ phase: 'empty', status: '' });
@@ -63,12 +72,28 @@ export async function loadPhotos(files: File[]) {
   }
 }
 
-async function build(canvas: HTMLCanvasElement, depthIn: DepthResult | undefined, focal35: number, placeName: string, saved?: any) {
+interface ExtraIn { canvas: HTMLCanvasElement; focal35: number; depth?: DepthResult; saved?: any }
+
+async function build(canvas: HTMLCanvasElement, depthIn: DepthResult | undefined, focal35: number, placeName: string, saved?: any, extras: ExtraIn[] = []) {
   const st = useStore.getState;
   const depth = depthIn || await estimateDepth(canvas, (p, msg) => useStore.setState({ progress: p, status: p < 1 ? `${msg} · ${Math.round(p * 100)}%` : `${msg}…` }));
   useStore.setState({ status: 'Ricostruisco lo spazio…', progress: 1 });
   await sleep(30);
   const recon = reconstruct(canvas, depth, focal35);
+  // foto in più: allineate alla prima, aggiungono le parti di stanza che la prima non vede
+  const skipped: number[] = [];
+  for (let i = 0; i < extras.length; i++) {
+    const x = extras[i];
+    const tot = extras.length + 1;
+    const d = x.depth || await estimateDepth(x.canvas, (p) => useStore.setState({ progress: p, status: `Leggo la foto ${i + 2} di ${tot} · ${Math.round(p * 100)}%` }));
+    useStore.setState({ status: `Unisco la foto ${i + 2} di ${tot} alla stanza…`, progress: 1 });
+    await sleep(30);
+    const ex = await registerExtra(recon, x.canvas, d, x.focal35, x.saved).catch((e) => { console.warn(e); return null; });
+    if (!ex) { skipped.push(i + 2); continue; }
+    recon.extras.push(ex);
+    if (!x.saved) recon.lights.push(...extraLights(recon, ex));
+    growRoom(recon, ex);
+  }
   linkIds(recon, saved?.readIds);
   const e = eng()!;
   e.loadRecon(recon);
@@ -112,9 +137,26 @@ async function build(canvas: HTMLCanvasElement, depthIn: DepthResult | undefined
   if (nSrc) parts.push(`${nSrc} ${nSrc === 1 ? 'sorgente' : 'sorgenti'} di luce`);
   if (nWin) parts.push(`${nWin} ${nWin === 1 ? 'finestra' : 'finestre'}`);
   useStore.setState({ status: parts.length ? `Trovate ${parts.join(' e ')}` : 'Nessuna sorgente visibile: ho messo una luce ambiente' });
+  if (skipped.length) st().showToast(skipped.length === 1 ? `La foto ${skipped[0]} non ha abbastanza punti in comune con la prima: l'ho lasciata da parte.` : `Le foto ${skipped.join(', ')} non hanno abbastanza punti in comune con la prima: le ho lasciate da parte.`);
+  else if (recon.extras.length) st().showToast(`Ho unito ${recon.extras.length + 1} foto: la stanza è più completa quando ti muovi.`);
   if (depth.source === 'stima') st().showToast('Profondità stimata senza il lettore: la stanza è approssimata. Con la connessione il risultato è più preciso.');
   await sleep(2200);
   useStore.setState({ status: '', past: [], future: [] });
+}
+
+// la stanza si allarga per contenere ciò che le foto in più vedono
+function growRoom(recon: Reconstruction, ex: import('./engine/register').ExtraView) {
+  const xs: number[] = [], ys: number[] = [], zs: number[] = [];
+  const used = new Set(ex.index);
+  for (const k of used) { xs.push(ex.world[k * 3]); ys.push(ex.world[k * 3 + 1]); zs.push(ex.world[k * 3 + 2]); }
+  if (xs.length < 50) return;
+  const pc = (a: number[], p: number) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor((p / 100) * (b.length - 1))]; };
+  const r = recon.room;
+  r.min[0] = Math.max(-15, Math.min(r.min[0], pc(xs, 2) - 0.08));
+  r.max[0] = Math.min(15, Math.max(r.max[0], pc(xs, 98) + 0.08));
+  r.min[2] = Math.max(-30, Math.min(r.min[2], pc(zs, 2) - 0.08));
+  r.max[2] = Math.min(15, Math.max(r.max[2], pc(zs, 98) + 0.08));
+  r.max[1] = Math.min(8, Math.max(r.max[1], pc(ys, 99) + 0.05));
 }
 
 // il sole com'era quando la foto è stata letta (salvato con il progetto se presente)
@@ -153,6 +195,11 @@ export function saveProject() {
     K: e.K, skyCal: e.skyCal, baseSun: (e as any).baseSun,
     scene: snapshotOf(),
     shots: s.shots,
+    extras: r.extras.map((x) => ({
+      photo: x.photo.toDataURL('image/jpeg', 0.9), focal35: x.focal35,
+      depth: { width: x.depthGrid.width, height: x.depthGrid.height, metric: x.depthGrid.metric, data: f32ToB64(Float32Array.from(x.depthGrid.data)) },
+      pose: x.pose, alpha: x.alpha, beta: x.beta, gain: x.gain, inliers: x.inliers,
+    })),
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const a = document.createElement('a');
@@ -173,7 +220,14 @@ export async function openProject(file: File) {
     const canvas = downscale(img, 2048);
     useStore.setState({ photos: [data.photo] });
     const depth: DepthResult = { width: data.depth.width, height: data.depth.height, metric: data.depth.metric, data: b64ToF32(data.depth.data), source: 'modello' };
-    await build(canvas, depth, data.focal35, data.placeName, data);
+    const extras: ExtraIn[] = [];
+    for (const x of data.extras || []) {
+      const im = new Image();
+      await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = x.photo; });
+      extras.push({ canvas: downscale(im, 2048), focal35: x.focal35, depth: { width: x.depth.width, height: x.depth.height, metric: x.depth.metric, data: b64ToF32(x.depth.data), source: 'modello' }, saved: x });
+    }
+    useStore.setState({ photos: [data.photo, ...(data.extras || []).map((x: any) => x.photo)] });
+    await build(canvas, depth, data.focal35, data.placeName, data, extras);
   } catch (e) {
     console.error(e);
     useStore.setState({ phase: st().recon ? 'ready' : 'empty', status: '' });

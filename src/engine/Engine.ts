@@ -51,7 +51,7 @@ void main(){
     vec4 cl = photoProj * vec4(photoRotInv * dir, 1.0);
     if (cl.w > 0.0) {
       vec2 puv = cl.xy / cl.w * 0.5 + 0.5;
-      float edge = smoothstep(0.0, 0.015, min(min(puv.x, 1.0 - puv.x), min(puv.y, 1.0 - puv.y)));
+      float edge = smoothstep(0.0, 0.002, min(min(puv.x, 1.0 - puv.x), min(puv.y, 1.0 - puv.y)));
       if (edge > 0.0) {
         // differenza ammorbidita: i cambi di luce sono morbidi, l'aliasing delle ombre no
         vec3 cur = vec3(0.0), base = vec3(0.0);
@@ -90,6 +90,34 @@ void main(){
   gl_FragColor = vec4(s, 1.0);
 }`;
 
+// profondità di campo: distanza dalla camera per pixel, poi sfocatura con il circolo di confusione
+const DIST_VERT = `varying float vD; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }`;
+const DIST_FRAG = `varying float vD; void main(){ gl_FragColor = vec4(vD, 0.0, 0.0, 1.0); }`;
+const DOF_FRAG = `
+precision highp float;
+uniform sampler2D tColor; uniform sampler2D tDist; uniform vec2 texel; uniform float A; uniform float S; uniform float pxPerMM; uniform float maxR;
+varying vec2 vUv;
+// diametro del circolo di confusione in pixel -> raggio
+float coc(float dm){ float d = max(dm * 1000.0, 1.0); return min(maxR, 0.5 * A * abs(d - S) / d * pxPerMM); }
+vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }
+void main(){
+  float r0 = coc(texture2D(tDist, vUv).r);
+  vec3 c0 = lin(texture2D(tColor, vUv).rgb);
+  if (r0 < 0.5) { gl_FragColor = vec4(pow(c0, vec3(1.0/2.2)), 1.0); return; }
+  vec3 acc = c0; float wsum = 1.0;
+  for (int i = 0; i < 64; i++) {
+    float fi = float(i);
+    float r = sqrt((fi + 0.5) / 64.0) * r0;
+    float a = fi * 2.39996;
+    vec2 uv = vUv + vec2(cos(a), sin(a)) * r * texel;
+    float rs = coc(texture2D(tDist, uv).r);
+    // un campione conta se il suo circolo copre questo pixel (niente aloni dal nitido)
+    float w = clamp(rs - r + 1.0, 0.0, 1.0);
+    acc += lin(texture2D(tColor, uv).rgb) * w; wsum += w;
+  }
+  gl_FragColor = vec4(pow(acc / wsum, vec3(1.0/2.2)), 1.0);
+}`;
+
 interface LightObj { state: LightState; raster: THREE.Light; target: THREE.Object3D; doors: THREE.Group | null }
 
 export interface Hit { point: THREE.Vector3; normal: THREE.Vector3; object: THREE.Object3D }
@@ -114,6 +142,10 @@ export class Engine {
   blurEmissive: HTMLCanvasElement | null = null;
   blurEmissiveTex: THREE.CanvasTexture | null = null;
   panes: { mesh: THREE.Mesh; windowId: string }[] = [];
+  fillMesh: THREE.Mesh | null = null;
+  extraMats: { mat: THREE.MeshStandardMaterial; gain: number }[] = [];
+  boxMats: [THREE.MeshStandardMaterial, THREE.MeshStandardMaterial][] = []; // copia della scatola, originale
+  syncBox() { for (const [c, o] of this.boxMats) c.emissiveIntensity = o.emissiveIntensity; }
   emissiveCanvas: HTMLCanvasElement | null = null;
   emissiveTex: THREE.CanvasTexture | null = null;
   photoLin: Float32Array | null = null;
@@ -135,7 +167,7 @@ export class Engine {
   dirty = true;
   onFrame: (() => void) | null = null;
   keys = new Set<string>();
-  yaw = 0; pitch = 0;
+  yaw = 0; pitch = 0; homeRoll = 0;
   albedoMean = 0.5;
   // vista dalla foto: foto proiettata + differenza di illuminazione
   photoCam = new THREE.PerspectiveCamera(50, 1, 0.03, 200);
@@ -147,6 +179,16 @@ export class Engine {
   maskBlack = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
   maskWhite = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
   shotRestore: (() => void) | null = null;
+  // profondità di campo
+  distRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType });
+  postRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.UnsignedByteType });
+  distMat = new THREE.ShaderMaterial({ vertexShader: DIST_VERT, fragmentShader: DIST_FRAG, side: THREE.DoubleSide });
+  dofMat = new THREE.ShaderMaterial({
+    vertexShader: QUAD_VERT, fragmentShader: DOF_FRAG, depthTest: false, depthWrite: false,
+    uniforms: { tColor: { value: null }, tDist: { value: null }, texel: { value: new THREE.Vector2() }, A: { value: 0 }, S: { value: 2000 }, pxPerMM: { value: 1 }, maxR: { value: 24 } },
+  });
+  dofScene = new THREE.Scene();
+  focusM = 2; // distanza di messa a fuoco in uso (metri)
   homePose: { pos: THREE.Vector3; quat: THREE.Quaternion; fov: number } | null = null;
   pt: any = null;
   shot: { target: number; start: number; onProgress: (p: number) => void; resolve: (c: HTMLCanvasElement | null) => void; ptLights: THREE.Group } | null = null;
@@ -175,6 +217,9 @@ export class Engine {
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.quadMat);
     this.quad.frustumCulled = false;
     this.quadScene.add(this.quad);
+    const dq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.dofMat);
+    dq.frustumCulled = false;
+    this.dofScene.add(dq);
 
     this.scene.background = new THREE.Color(0x050506);
     this.scene.add(this.room, this.rasterLights, this.camera);
@@ -203,6 +248,8 @@ export class Engine {
     this.renderer.setSize(w, h, false);
     const pr = this.renderer.getPixelRatio();
     this.rt.setSize(Math.round(w * pr), Math.round(h * pr));
+    this.distRT.setSize(Math.round(w * pr), Math.round(h * pr));
+    this.postRT.setSize(Math.round(w * pr), Math.round(h * pr));
     this.camera.aspect = w / h;
     this.updateLens();
     this.dirty = true;
@@ -343,6 +390,7 @@ export class Engine {
     const fillMesh = new THREE.Mesh(fgeo, this.blurMaterial);
     fillMesh.name = 'raccordi';
     fillMesh.castShadow = false; fillMesh.receiveShadow = true;
+    this.fillMesh = fillMesh;
     // pareti, pavimento e soffitto letti (vicini ai piani della stanza) non portano ombre:
     // l'involucro le porta già, e i loro bordi irregolari disegnavano strisce di luce e ombra
     const [rx0, ry0, rz0] = recon.room.min, [rx1, ry1] = recon.room.max;
@@ -369,6 +417,29 @@ export class Engine {
     depthMesh.castShadow = true; depthMesh.receiveShadow = true;
     this.room.add(depthMesh, shellMesh, fillMesh);
     this.surfaces.push(depthMesh, shellMesh);
+
+    // ---- foto in più: le parti della stanza che la prima foto non vede ----
+    this.extraMats = [];
+    for (const ex of recon.extras || []) {
+      if (!ex.index.length) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(ex.world.slice(), 3));
+      const euv = new Float32Array(ex.gw * ex.gh * 2);
+      for (let j = 0; j < ex.gh; j++) for (let i = 0; i < ex.gw; i++) { const k = j * ex.gw + i; euv[k * 2] = i / (ex.gw - 1); euv[k * 2 + 1] = 1 - j / (ex.gh - 1); }
+      g.setAttribute('uv', new THREE.BufferAttribute(euv, 2));
+      g.setIndex(ex.index);
+      g.computeVertexNormals();
+      (g as any).computeBoundsTree();
+      const at = new THREE.CanvasTexture(ex.albedo); at.colorSpace = THREE.SRGBColorSpace; at.anisotropy = 8;
+      const et = new THREE.CanvasTexture(ex.photo); et.colorSpace = THREE.SRGBColorSpace;
+      const em = new THREE.MeshStandardMaterial({ map: at, emissiveMap: et, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0, roughness: 0.85, metalness: 0, side: THREE.DoubleSide });
+      this.extraMats.push({ mat: em, gain: ex.gain });
+      const mesh = new THREE.Mesh(g, em);
+      mesh.name = 'foto in più';
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      this.room.add(mesh);
+      this.surfaces.push(mesh);
+    }
 
     // ---- scatola della stanza (per girare liberamente) ----
     const box = this.buildBox(recon, mat);
@@ -507,7 +578,13 @@ export class Engine {
     // parete dietro la camera: colore medio dell'albedo
     const avg = averageColor(recon.albedo);
     const backMat = new THREE.MeshStandardMaterial({ color: avg, roughness: 0.9, side: THREE.DoubleSide, emissive: avg, emissiveIntensity: 0 });
-    const mesh = new THREE.Mesh(g, [mat, backMat, this.blurMaterial!]);
+    // la scatola fa da sfondo: non copre mai la stanza ricostruita (dall'interno di una scatola
+    // ogni direzione incontra una sola parete, quindi non serve la profondità)
+    const front = mat.clone(), blur = this.blurMaterial!.clone();
+    for (const m of [front, backMat, blur]) m.depthWrite = false;
+    this.boxMats = [[front, mat], [blur, this.blurMaterial!]];
+    const mesh = new THREE.Mesh(g, [front, backMat, blur]);
+    mesh.renderOrder = -1;
     mesh.name = 'scatola';
     mesh.castShadow = true; mesh.receiveShadow = true;
     mesh.userData.backMat = backMat;
@@ -736,6 +813,9 @@ export class Engine {
       this.blurEmissiveTex.needsUpdate = true;
       this.blurMaterial.emissiveIntensity = this.K;
     }
+    // foto in più: la loro luce, riportata all'esposizione della prima foto
+    for (const x of this.extraMats) x.mat.emissiveIntensity = this.K * amb * x.gain;
+    this.syncBox();
     const box = this.room.getObjectByName('scatola') as THREE.Mesh;
     if (box) {
       const bm = box.userData.backMat as THREE.MeshStandardMaterial;
@@ -769,6 +849,9 @@ export class Engine {
     const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType });
     const prevK = this.material.emissiveIntensity;
     this.material.emissiveIntensity = 0;
+    const prevEx = this.extraMats.map((x) => x.mat.emissiveIntensity);
+    this.extraMats.forEach((x) => (x.mat.emissiveIntensity = 0));
+    this.syncBox();
     const panesVis = this.panes.map((p) => p.mesh.visible);
     this.panes.forEach((p) => (p.mesh.visible = false));
     this.renderer.setRenderTarget(rt);
@@ -779,6 +862,8 @@ export class Engine {
     rt.dispose();
     this.panes.forEach((p, i) => (p.mesh.visible = panesVis[i]));
     this.material.emissiveIntensity = prevK;
+    this.extraMats.forEach((x, i) => (x.mat.emissiveIntensity = prevEx[i]));
+    this.syncBox();
     // media robusta (escludo le sorgenti molto brillanti)
     const lums: number[] = [];
     for (let i = 0; i < w * h; i++) lums.push(0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2]);
@@ -809,15 +894,19 @@ export class Engine {
     this.camera.position.copy(this.homePose.pos);
     this.camera.quaternion.copy(this.homePose.quat);
     const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
-    this.yaw = e.y; this.pitch = e.x;
+    this.yaw = e.y; this.pitch = e.x; this.homeRoll = e.z;
     this.applyLook();
     this.dirty = true;
   }
 
   applyLook() {
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
-    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
     this.clampCamera();
+    // la foto può essere storta (camera a mano): dal suo punto di vista si tiene la stessa
+    // inclinazione, così la foto riempie lo schermo; allontanandosi l'orizzonte torna dritto
+    const d = this.homePose ? this.camera.position.distanceTo(this.homePose.pos) : 1;
+    const roll = this.homeRoll * (1 - THREE.MathUtils.smoothstep(d, 0.05, 0.8));
+    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, roll, 'YXZ'));
     this.camera.updateMatrixWorld();
   }
 
@@ -996,13 +1085,81 @@ export class Engine {
     if (this.shot) { this.tickShot(); this.onFrame?.(); return; }
     if (!this.dirty) return;
     this.dirty = false;
+    // con più foto i raccordi tra primo piano e sfondo (stirati dalla prima foto) coprirebbero
+    // ciò che le altre foto vedono: si mostrano solo vicino al punto di vista della prima
+    if (this.fillMesh && this.recon?.extras.length && this.homePose) this.fillMesh.visible = this.camera.position.distanceTo(this.homePose.pos) < 0.35;
     this.camera.updateMatrixWorld();
     this.renderer.setRenderTarget(this.rt);
     this.renderer.render(this.scene, this.camera);
     this.updateRelight();
-    this.renderer.setRenderTarget(null);
-    this.renderer.render(this.quadScene, this.quadCam);
+    this.present(null);
     this.onFrame?.();
+  }
+
+  // distanza di messa a fuoco: quella scelta, oppure la prima persona inquadrata, oppure il centro
+  focusDistance(): number {
+    const c = this.cam;
+    if (c?.focus && c.focus > 0) return c.focus;
+    this.camera.updateMatrixWorld();
+    for (const p of this.people.values()) {
+      const j = (p.obj.userData.joints as any)?.head as THREE.Object3D | undefined;
+      if (!j) continue;
+      const hp = j.getWorldPosition(new THREE.Vector3());
+      const v = hp.clone().project(this.camera);
+      const inFront = hp.clone().applyMatrix4(this.camera.matrixWorldInverse).z < 0;
+      if (inFront && Math.abs(v.x) < 0.9 && Math.abs(v.y) < 0.9) return hp.distanceTo(this.camera.position);
+    }
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    (rc as any).firstHitOnly = true;
+    const h = rc.intersectObjects([...this.surfaces, ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)], true)[0];
+    return h ? Math.max(0.3, h.distance) : 3;
+  }
+
+  // parametri della profondità di campo; false se tutto è a fuoco
+  setupDof(target: { width: number; height: number }): boolean {
+    const c = this.cam;
+    if (!c || !this.recon) return false;
+    const sensor = SENSORS.find((x) => x.id === c.sensor) || SENSORS[0];
+    const f = c.focal, N = c.fStop;
+    const S = Math.max(this.focusDistance() * 1000, f * 1.5);
+    this.focusM = S / 1000;
+    const A = (f * f) / (N * (S - f));
+    const fw = (this.frameRect.x1 - this.frameRect.x0) * target.width;
+    const pxPerMM = fw / sensor.width;
+    // sfocatura massima possibile (sfondo all'infinito): se è sotto mezzo pixel non serve
+    if (0.5 * A * pxPerMM < 0.5) return false;
+    const u = this.dofMat.uniforms;
+    u.A.value = A; u.S.value = S; u.pxPerMM.value = pxPerMM;
+    u.maxR.value = Math.max(4, Math.round(target.width / 80));
+    u.texel.value.set(1 / target.width, 1 / target.height);
+    return true;
+  }
+
+  // compone l'immagine finale (foto, luci, esposizione) e la profondità di campo
+  present(target: THREE.WebGLRenderTarget | null) {
+    const size = target || this.rt;
+    if (!this.setupDof(size)) {
+      this.renderer.setRenderTarget(target);
+      this.renderer.render(this.quadScene, this.quadCam);
+      return;
+    }
+    if (this.postRT.width !== size.width || this.postRT.height !== size.height) { this.postRT.setSize(size.width, size.height); this.distRT.setSize(size.width, size.height); }
+    this.renderer.setRenderTarget(this.postRT);
+    this.renderer.render(this.quadScene, this.quadCam);
+    // distanza per pixel
+    const prevBg = this.scene.background, prevOv = this.scene.overrideMaterial;
+    const prevClear = this.renderer.getClearColor(new THREE.Color()), prevAlpha = this.renderer.getClearAlpha();
+    this.scene.background = null; this.scene.overrideMaterial = this.distMat;
+    this.renderer.setClearColor(new THREE.Color(1000, 0, 0), 1);
+    this.renderer.setRenderTarget(this.distRT);
+    this.renderer.render(this.scene, this.camera);
+    this.scene.background = prevBg; this.scene.overrideMaterial = prevOv;
+    this.renderer.setClearColor(prevClear, prevAlpha);
+    const u = this.dofMat.uniforms;
+    u.tColor.value = this.postRT.texture; u.tDist.value = this.distRT.texture;
+    this.renderer.setRenderTarget(target);
+    this.renderer.render(this.dofScene, this.quadCam);
   }
 
   setupRelight(recon: Reconstruction) {
@@ -1133,7 +1290,7 @@ export class Engine {
     this.renderer.toneMapping = THREE.NoToneMapping;
     // solo la luce delle sorgenti aggiunte: la stanza non emette (la sua luce è già nella foto)
     const saved: [THREE.MeshStandardMaterial, number][] = [];
-    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material)].filter(Boolean) as THREE.MeshStandardMaterial[];
+    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material), ...this.extraMats.map((x) => x.mat), ...this.boxMats.map((x) => x[0])].filter(Boolean) as THREE.MeshStandardMaterial[];
     for (const m of roomMats) { saved.push([m, m.emissiveIntensity]); m.emissiveIntensity = 0; }
     this.shotRestore = () => { for (const [m, ei] of saved) m.emissiveIntensity = ei; };
     const prevBg = this.scene.background;
@@ -1216,8 +1373,7 @@ export class Engine {
       u.tAdd.value = add; u.addW.value = add ? 1 : 0;
       const prevMask = u.maskAlpha.value; u.maskAlpha.value = 1;
       const prevFc = u.falseColor.value; u.falseColor.value = 0;
-      this.renderer.setRenderTarget(out);
-      this.renderer.render(this.quadScene, this.quadCam);
+      this.present(out);
       u.maskAlpha.value = prevMask; u.falseColor.value = prevFc;
       const px = new Uint8Array(W * H * 4);
       this.renderer.readRenderTargetPixels(out, 0, 0, W, H, px);

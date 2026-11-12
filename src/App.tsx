@@ -126,10 +126,13 @@ export default function App() {
   // interfaccia che si ritira quando non si muove nulla
   useEffect(() => {
     let t: any;
+    // su tablet e telefono (niente mouse) l'interfaccia resta sempre visibile: un tocco
+    // su un pulsante nascosto finirebbe sulla scena
+    if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) return;
     const wake = () => { setIdle(false); clearTimeout(t); t = setTimeout(() => setIdle(true), 3500); };
-    addEventListener('pointermove', wake); addEventListener('keydown', wake);
+    addEventListener('pointermove', wake); addEventListener('keydown', wake); addEventListener('pointerdown', wake, true);
     wake();
-    return () => { removeEventListener('pointermove', wake); removeEventListener('keydown', wake); clearTimeout(t); };
+    return () => { removeEventListener('pointermove', wake); removeEventListener('keydown', wake); removeEventListener('pointerdown', wake, true); clearTimeout(t); };
   }, []);
 
   // trascinamento file
@@ -197,7 +200,7 @@ export default function App() {
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.2"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></svg>
         </div>
         <h1 onClick={() => fileRef.current?.click()}>Trascina qui la foto del luogo</h1>
-        <p>Una basta: ricostruisco la stanza e trovo le luci.</p>
+        <p>Una basta: ricostruisco la stanza e trovo le luci. Con più foto dello stesso luogo la stanza è più completa.</p>
         <button className="alt" onClick={() => loadSample()}>Oppure prova con una stanza di esempio</button>
       </div>
       <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) loadPhotos(f); }} />
