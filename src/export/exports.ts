@@ -38,9 +38,12 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   const { scene, recon, camera } = inp;
   const [x0, , z0] = recon.room.min, [x1, , z1] = recon.room.max;
   const pad = 70;
-  const sx = (W - pad * 2) / (x1 - x0), sz = (H - pad * 2 - 30) / (z1 - z0);
+  // pianta a sinistra, legenda numerata a destra (i numeri rimandano alla lista materiale)
+  const legendW = Math.round(W * 0.32);
+  const PW = W - legendW;
+  const sx = (PW - pad * 2) / (x1 - x0), sz = (H - pad * 2 - 30) / (z1 - z0);
   const s = Math.min(sx, sz);
-  const ox = (W - (x1 - x0) * s) / 2, oz = (H - 30 - (z1 - z0) * s) / 2;
+  const ox = (PW - (x1 - x0) * s) / 2, oz = (H - 30 - (z1 - z0) * s) / 2;
   const X = (x: number) => ox + (x - x0) * s;
   const Z = (z: number) => oz + (z - z0) * s;
   const skyLux = scene.sun.enabled ? sunSky(scene.sun).skyLux : 0;
@@ -111,12 +114,17 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
     out += `<circle cx="${lx}" cy="${lz}" r="15" fill="${L.on ? col : '#fff'}" stroke="#111" stroke-width="1.5"/>`;
     out += `<text x="${lx}" y="${lz + 4.5}" text-anchor="middle" font-size="13" font-weight="700" fill="#111">${i + 1}</text>`;
     const lux = Math.round(luxAtTarget(L, skyLux));
-    const sub = L.origin === 'finestra' ? 'Luce naturale' : `${effectiveKelvin(L.kelvin, L.gel)} K · ${stopsLabel(L.stops)}`;
-    out += `<text x="${lx}" y="${lz - 22}" text-anchor="middle" font-size="11" font-weight="600" fill="#111">${esc(L.name)}</text>`;
-    out += `<text x="${lx}" y="${lz + 31}" text-anchor="middle" font-size="10" fill="#666">${esc(sub)}${L.on && L.origin !== 'finestra' ? ` · ${lux} lux` : ''} · h ${L.position[1].toFixed(1)} m</text>`;
+    const sub = L.origin === 'finestra' ? 'Luce naturale' : `${effectiveKelvin(L.kelvin, L.gel)} K · ${stopsLabel(L.stops)}${L.on ? ` · ${lux} lux` : ' · spenta'}`;
+    const ly = pad + i * 44;
+    if (ly < H - 60) {
+      out += `<circle cx="${PW + 14}" cy="${ly}" r="11" fill="${L.on ? col : '#fff'}" stroke="#111" stroke-width="1.2"/>`;
+      out += `<text x="${PW + 14}" y="${ly + 4}" text-anchor="middle" font-size="11" font-weight="700" fill="#111">${i + 1}</text>`;
+      out += `<text x="${PW + 34}" y="${ly - 2}" font-size="12" font-weight="600" fill="#111">${esc(L.name)}</text>`;
+      out += `<text x="${PW + 34}" y="${ly + 13}" font-size="10.5" fill="#666">${esc(sub)} · h ${L.position[1].toFixed(1)} m</text>`;
+    }
   });
   // scala e nord
-  const bx = W - pad - s, by = H - 22;
+  const bx = PW - pad - s, by = H - 22;
   out += `<line x1="${bx}" y1="${by}" x2="${bx + s}" y2="${by}" stroke="#111" stroke-width="2"/><line x1="${bx}" y1="${by - 5}" x2="${bx}" y2="${by + 5}" stroke="#111"/><line x1="${bx + s}" y1="${by - 5}" x2="${bx + s}" y2="${by + 5}" stroke="#111"/>`;
   out += `<text x="${bx + s / 2}" y="${by - 8}" text-anchor="middle" font-size="11" fill="#111">1 m</text>`;
   const nA = scene.sun.north;

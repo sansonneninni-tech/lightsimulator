@@ -13,7 +13,8 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     return () => ro.disconnect();
   }, []);
   useLayoutEffect(() => {
-    const r = el.current!.getBoundingClientRect();
+    // misure senza la trasformazione dell'animazione di apertura
+    const r = { height: el.current!.offsetHeight };
     const W = innerWidth, H = innerHeight;
     let left = x, top = y;
     if (anchor === 'side') {

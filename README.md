@@ -11,7 +11,7 @@ Strumento per direttori della fotografia: carichi la foto di un luogo, ottieni l
 5. Persone: 6 pose (in piedi, seduto, steso, in ginocchio, cammina, braccia conserte); doppio clic sull'anello per il manichino con le articolazioni.
 6. Camera: focale, sensore, ISO, diaframma, otturatore, false color, esposimetro a luce incidente, mascherine di formato.
 7. In alto a destra: ora del giorno, stagione, meteo e orientamento per la luce dalle finestre.
-8. Il pulsante bianco scatta il render finale in path tracing (con profondità di campo). Dal rullino: immagine, pianta luci, lista materiale (CSV) e PDF per la troupe.
+8. Il pulsante bianco scatta il render finale: stessi colori dell'anteprima, luci aggiunte in path tracing. Dal rullino: immagine, pianta luci, lista materiale (CSV) e PDF per la troupe.
 9. Spazio mostra la foto originale; Cmd+Z annulla; Cmd+S salva il progetto `.luce` da condividere.
 
 ## Sviluppo
@@ -26,7 +26,7 @@ Tutto gira nel browser: nessun server, nessun costo di calcolo.
 
 - Profondità: Depth Anything V2 Small (ONNX Runtime Web, WebGPU o WASM), scaricato da Hugging Face alla prima foto e poi tenuto in cache. Se esiste `public/models/depth.onnx` viene usato quello: la versione pubblicata lo include (Depth Anything V2 Small, licenza Apache 2.0, pesi in mezza precisione, 50 MB) e lo tiene in cache dopo la prima foto. Per rigenerarlo: scarica il modello ONNX fp32 e salva i pesi in fp16 con nodi Cast (script in `tools/weights_fp16.py`). Senza modello l'app ripiega su una stima geometrica della stanza.
 - Anteprima: Three.js con luci fotometriche (lumen, candele, lux), ombre, luce indiretta stimata, tone mapping neutro ed esposizione fisica (EV100 da ISO, diaframma, otturatore).
-- Render finale: `three-gpu-pathtracer`.
+- Scatto: la stessa composizione dell'anteprima (foto o stanza ricostruita, con le luci lette regolate) a piena risoluzione, più le luci aggiunte calcolate in path tracing con `three-gpu-pathtracer` (ombre morbide e rimbalzi sui colori della stanza). Così lo scatto ha gli stessi colori e la stessa esposizione dell'anteprima.
 
 ## Struttura
 

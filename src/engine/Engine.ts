@@ -25,6 +25,7 @@ const QUAD_FRAG = `
 precision highp float;
 uniform sampler2D tDiffuse; uniform float exposure; uniform int falseColor; uniform vec4 frame; uniform float maskAlpha;
 uniform sampler2D tPhoto; uniform sampler2D tBase; uniform sampler2D tCur; uniform sampler2D tMask;
+uniform sampler2D tAdd; uniform float addW;
 uniform float relightW; uniform float photoK; uniform vec2 texel; uniform mat4 invProj; uniform mat3 camRot; uniform mat3 photoRotInv; uniform mat4 photoProj;
 varying vec2 vUv;
 vec3 neutral(vec3 color){
@@ -69,6 +70,8 @@ void main(){
       }
     }
   }
+  // scatto: luci aggiunte calcolate in path tracing, sommate alla scena
+  if (addW > 0.0) scene += texture2D(tAdd, vUv).rgb * addW;
   vec3 c = max(scene * exposure, 0.0);
   vec3 s = toSRGB(clamp(neutral(c), 0.0, 1.0));
   if (falseColor == 1) {
@@ -166,7 +169,7 @@ export class Engine {
     this.quadMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT, fragmentShader: QUAD_FRAG, depthTest: false, depthWrite: false,
       uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 },
-        tPhoto: { value: null }, tBase: { value: null }, tCur: { value: null }, tMask: { value: null }, relightW: { value: 0 }, photoK: { value: 1 }, texel: { value: new THREE.Vector2(0.001, 0.001) },
+        tPhoto: { value: null }, tBase: { value: null }, tCur: { value: null }, tMask: { value: null }, tAdd: { value: null }, addW: { value: 0 }, relightW: { value: 0 }, photoK: { value: 1 }, texel: { value: new THREE.Vector2(0.001, 0.001) },
         invProj: { value: new THREE.Matrix4() }, camRot: { value: new THREE.Matrix3() }, photoRotInv: { value: new THREE.Matrix3() }, photoProj: { value: new THREE.Matrix4() } },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.quadMat);
@@ -340,12 +343,32 @@ export class Engine {
     const fillMesh = new THREE.Mesh(fgeo, this.blurMaterial);
     fillMesh.name = 'raccordi';
     fillMesh.castShadow = false; fillMesh.receiveShadow = true;
+    // pareti, pavimento e soffitto letti (vicini ai piani della stanza) non portano ombre:
+    // l'involucro le porta già, e i loro bordi irregolari disegnavano strisce di luce e ombra
+    const [rx0, ry0, rz0] = recon.room.min, [rx1, ry1] = recon.room.max;
+    const near = (k: number) => {
+      const x = world[k * 3], y = world[k * 3 + 1], z = world[k * 3 + 2];
+      return Math.min(x - rx0, rx1 - x, y - ry0, ry1 - y, z - rz0) < 0.3;
+    };
+    const objIdx: number[] = [], shellIdx: number[] = [];
+    for (let t = 0; t < idx.length; t += 3) {
+      const [p, q, r] = [idx[t], idx[t + 1], idx[t + 2]];
+      (near(p) && near(q) && near(r) ? shellIdx : objIdx).push(p, q, r);
+    }
+    const sgeo = new THREE.BufferGeometry();
+    for (const k of ['position', 'uv', 'normal']) sgeo.setAttribute(k, geo.attributes[k]);
+    sgeo.setIndex(shellIdx);
+    (sgeo as any).computeBoundsTree();
+    const shellMesh = new THREE.Mesh(sgeo, mat);
+    shellMesh.name = 'stanza';
+    shellMesh.castShadow = false; shellMesh.receiveShadow = true;
+    geo.setIndex(objIdx);
     (geo as any).computeBoundsTree();
     const depthMesh = new THREE.Mesh(geo, mat);
-    depthMesh.name = 'stanza';
+    depthMesh.name = 'oggetti';
     depthMesh.castShadow = true; depthMesh.receiveShadow = true;
-    this.room.add(depthMesh, fillMesh);
-    this.surfaces.push(depthMesh);
+    this.room.add(depthMesh, shellMesh, fillMesh);
+    this.surfaces.push(depthMesh, shellMesh);
 
     // ---- scatola della stanza (per girare liberamente) ----
     const box = this.buildBox(recon, mat);
@@ -402,7 +425,13 @@ export class Engine {
       const c = p.clone().sub(camPos).applyQuaternion(inv);
       if (c.z > -0.05) return false;
       const u = (c.x / (-c.z * tanH) + 1) / 2, v = (c.y / (-c.z * tanV) + 1) / 2;
-      return u > 0.01 && u < 0.99 && v > 0.01 && v < 0.99;
+      if (!(u > 0.01 && u < 0.99 && v > 0.01 && v < 0.99)) return false;
+      // la foto vede davvero questa parete solo se lì la profondità letta coincide:
+      // altrimenti proietterebbe sulla scatola ciò che sta davanti (lampade, mobili) come strisce
+      const gi = Math.min(recon.gw - 1, Math.max(0, Math.round(u * (recon.gw - 1))));
+      const gj = Math.min(recon.gh - 1, Math.max(0, Math.round((1 - v) * (recon.gh - 1))));
+      const dz = recon.camDepth[gj * recon.gw + gi];
+      return Math.abs(dz + c.z) < Math.max(0.25, -c.z * 0.15);
     };
     const project = (p: THREE.Vector3) => {
       const c = p.clone().sub(camPos).applyQuaternion(inv);
@@ -421,6 +450,8 @@ export class Engine {
     const N = 40;
     const pos: number[] = [], uvs: number[] = [], index: number[] = [];
     const backIndex: number[] = [], outIndex: number[] = [];
+    const faceOut: number[] = [];
+    let su = 0, sv = 0, sn = 0;
     const windows = recon.windows.map((w) => ({ w, c: new THREE.Vector3(...w.center) }));
     let base = 0;
     for (const f of faces) {
@@ -430,6 +461,8 @@ export class Engine {
       const toIn = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2).sub(center);
       const flip = normal.dot(toIn) < 0;
       const planeD = -normal.dot(f.o);
+      su = 0; sv = 0; sn = 0;
+      base = pos.length / 3;
       for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
         const p = f.o.clone().addScaledVector(f.a, i / N).addScaledVector(f.b, j / N);
         pos.push(p.x, p.y, p.z);
@@ -448,9 +481,19 @@ export class Engine {
         }
         const tri = flip ? [a, c, b, b, c, d] : [a, b, c, b, d, c];
         const pc = f.o.clone().addScaledVector(f.a, (i + 0.5) / N).addScaledVector(f.b, (j + 0.5) / N);
-        (f.back ? backIndex : inside(pc) ? index : outIndex).push(...tri);
+        if (f.back) backIndex.push(...tri);
+        else if (inside(pc)) { index.push(...tri); const [u, v] = project(pc); su += u; sv += v; sn++; }
+        else faceOut.push(...tri);
       }
-      base += (N + 1) * (N + 1);
+      // parti che la foto non vede: un colore uniforme, preso dalla parte vista della stessa parete
+      // (con le coordinate bloccate al bordo della foto venivano strisce)
+      const mu = sn ? su / sn : 0.5, mv = sn ? sv / sn : 0.5;
+      for (const k of faceOut) {
+        outIndex.push(pos.length / 3);
+        pos.push(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]);
+        uvs.push(mu, mv);
+      }
+      faceOut.length = 0;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -534,6 +577,10 @@ export class Engine {
       const lm = L.on ? effectiveLumens(L, skyLux) : 0;
       r.visible = L.on && lm > 0;
       r.castShadow = r.visible && shadowBudget-- > 0;
+      // le luci lette stanno dentro la forma della loro lampada (paralume, globo): senza un
+      // margine la lampada stessa proietta raggi d'ombra su soffitto e pareti
+      const nearShadow = L.origin === 'letta' ? 0.35 : 0.05;
+      if (r.shadow.camera.near !== nearShadow) { r.shadow.camera.near = nearShadow; r.shadow.camera.updateProjectionMatrix(); }
       if (wantKind === 'point') {
         r.intensity = lm / (4 * Math.PI);
         r.decay = 2; r.distance = 0;
@@ -606,8 +653,30 @@ export class Engine {
         o.state = p;
         applyPose(o.obj, p);
       }
+      // i piedi poggiano sul pavimento letto dalla foto (che può non stare esattamente a quota 0)
+      const obj = this.people.get(p.id)!.obj;
+      obj.position.y = p.position[1] + this.groundAt(p.position[0], p.position[2]);
     }
   }
+
+  groundAt(x: number, z: number) {
+    // quota del pavimento letto attorno ai piedi (mediana su una piccola griglia)
+    const ys: number[] = [];
+    const rc = new THREE.Raycaster();
+    rc.far = 2.2;
+    for (const dx of [-0.3, 0, 0.3]) for (const dz of [-0.3, 0, 0.3]) {
+      rc.set(new THREE.Vector3(x + dx, 1.4, z + dz), new THREE.Vector3(0, -1, 0));
+      for (const h of rc.intersectObjects(this.surfaces, false)) {
+        if (h.object.name === 'scatola') break;
+        const n = h.face?.normal;
+        if (h.point.y < 0.5 && h.point.y > -0.4 && (!n || Math.abs(n.y) > 0.5)) { ys.push(h.point.y); break; }
+      }
+    }
+    if (!ys.length) return 0;
+    ys.sort((p, q) => p - q);
+    return ys[Math.floor(ys.length / 2)];
+  }
+
 
   syncProps(list: PropState[]) {
     const ids = new Set(list.map((p) => p.id));
@@ -999,25 +1068,29 @@ export class Engine {
     u.camRot.value.setFromMatrix4(this.camera.matrixWorld);
   }
 
-  // ---------------- scatto (path tracing) ----------------
+  // ---------------- scatto ----------------
+  // Lo scatto è l'anteprima a piena qualità: la foto (o la stanza ricostruita) con le luci
+  // lette regolate come nell'anteprima, più le luci aggiunte calcolate in path tracing
+  // (ombre morbide, rimbalzi sui colori veri della stanza). Così lo scatto ha gli stessi colori,
+  // la stessa esposizione e lo stesso bilanciamento dell'anteprima, solo più pulito.
   async shoot(onProgress: (p: number) => void, samples = 384): Promise<HTMLCanvasElement | null> {
     if (this.shot || !this.snapshot) return null;
     const s = this.snapshot;
-    // luci per il path tracer
+    const added = s.lights.filter((L) => L.on && L.origin === 'aggiunta' && effectiveLumens(L, 0) > 0);
+    if (!added.length) {
+      onProgress(1);
+      await new Promise((r) => setTimeout(r, 30));
+      return this.composeShot(null);
+    }
     const ptLights = new THREE.Group();
-    const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
-    const skyK = sunSky(s.sun).skyK;
-    for (const L of s.lights) {
-      if (!L.on) continue;
+    for (const L of added) {
       const fx = fixtureById(L.fixtureId);
-      const lm = effectiveLumens(L, skyLux);
-      if (lm <= 0) continue;
-      const color = lightColor(L.origin === 'finestra' ? skyK : L.kelvin, L.gel);
+      const lm = effectiveLumens(L, 0);
+      const color = lightColor(L.kelvin, L.gel);
       const pos = new THREE.Vector3(...L.position), tgt = new THREE.Vector3(...L.target);
-      if (L.origin === 'finestra' || fx.kind === 'area') {
-        const w = L.size[0] * (L.origin === 'finestra' ? 1 : 1 + L.softness), h = L.size[1] * (L.origin === 'finestra' ? 1 : 1 + L.softness);
-        const nits = lm / (Math.PI * w * h);
-        const al = new THREE.RectAreaLight(color, nits, w, h);
+      if (fx.kind === 'area') {
+        const w = L.size[0] * (1 + L.softness), h = L.size[1] * (1 + L.softness);
+        const al = new THREE.RectAreaLight(color, lm / (Math.PI * w * h), w, h);
         al.position.copy(pos);
         al.lookAt(tgt);
         ptLights.add(al);
@@ -1038,26 +1111,9 @@ export class Engine {
         ptLights.add(pl);
       }
     }
-    if (this.sun.visible) {
-      const d = new THREE.DirectionalLight(this.sun.color.clone(), this.sun.intensity);
-      d.position.copy(this.sun.position); d.target.position.copy(this.sun.target.position);
-      ptLights.add(d, d.target);
-    }
-    const refMean = this.meanRender();
     this.scene.remove(this.rasterLights);
     this.scene.add(ptLights);
     ptLights.updateMatrixWorld(true);
-    // fuoco: persona più vicina al centro o superficie al centro
-    const r = this.renderer.domElement.getBoundingClientRect();
-    const hit = this.raycast(r.left + r.width / 2, r.top + r.height / 2);
-    let focus = hit ? hit.point.distanceTo(this.camera.position) : 3;
-    for (const p of this.people.values()) {
-      const head = this.jointWorld(p.state.id, 'head');
-      if (head) { const pr = this.project(head); if (!pr.behind && pr.x > 0 && pr.x < r.width && pr.y > 0 && pr.y < r.height) { focus = pr.dist; break; } }
-    }
-    this.camera.focusDistance = focus;
-    this.camera.fStop = s.cam.fStop;
-    this.camera.apertureBlades = 7;
 
     if (!this.pt) {
       this.pt = new WebGLPathTracer(this.renderer);
@@ -1068,24 +1124,18 @@ export class Engine {
       this.pt.dynamicLowRes = false;
       this.pt.filterGlossyFactor = 0.5;
       this.pt.textureSize.set(2048, 2048);
+      // durante il calcolo resta a schermo l'anteprima
+      this.pt.renderToCanvas = false;
+      this.pt.rasterizeScene = false;
     }
     this.pt.multipleImportanceSampling = true;
-    this.pt.bounces = 5;
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = this.exposure;
-    // la luce che resta dalla foto contiene già i suoi rimbalzi: nel path tracer
-    // non deve rimbalzare di nuovo. Albedo contenuta e emissione ridotta di (1 - albedo).
-    const cScale = Math.min(1, 0.55 / Math.max(0.05, this.albedoMean));
-    const rho = Math.min(0.9, this.albedoMean * cScale);
-    const emScale = Math.max(0.15, 1 - rho * 0.9);
-    const saved: [THREE.MeshStandardMaterial, THREE.Color, number][] = [];
-    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat].filter(Boolean) as THREE.MeshStandardMaterial[];
-    for (const m of roomMats) {
-      saved.push([m, m.color.clone(), m.emissiveIntensity]);
-      m.color.multiplyScalar(cScale);
-      m.emissiveIntensity *= emScale;
-    }
-    this.shotRestore = () => { for (const [m, c, ei] of saved) { m.color.copy(c); m.emissiveIntensity = ei; } };
+    this.pt.bounces = 4;
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    // solo la luce delle sorgenti aggiunte: la stanza non emette (la sua luce è già nella foto)
+    const saved: [THREE.MeshStandardMaterial, number][] = [];
+    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material)].filter(Boolean) as THREE.MeshStandardMaterial[];
+    for (const m of roomMats) { saved.push([m, m.emissiveIntensity]); m.emissiveIntensity = 0; }
+    this.shotRestore = () => { for (const [m, ei] of saved) m.emissiveIntensity = ei; };
     const prevBg = this.scene.background;
     this.scene.background = new THREE.Color(0, 0, 0);
     this.scene.environment = null;
@@ -1096,12 +1146,11 @@ export class Engine {
     } catch (e) {
       console.error(e);
       this.finishShot(ptLights, prevBg);
-      return null;
+      return this.composeShot(null);
     }
     this.pt.reset();
     return new Promise((resolve) => {
       this.shot = { target: samples, start: performance.now(), onProgress, resolve, ptLights };
-      (this.shot as any).refMean = refMean;
       (this.shot as any).prevBg = prevBg;
     });
   }
@@ -1111,80 +1160,93 @@ export class Engine {
     this.pt.renderSample();
     const smp = this.pt.samples;
     const elapsed = (performance.now() - sh.start) / 1000;
-    const cap = Number(new URLSearchParams(location.search).get("cap")) || 120;
+    const cap = Number(new URLSearchParams(location.search).get('cap')) || 120;
     const p = Math.min(1, Math.max(smp / sh.target, elapsed / cap));
     (window as any).__ptSamples = smp;
-    sh.onProgress(p);
+    sh.onProgress(Math.min(0.99, p));
     if (p >= 1) {
-      // cattura immediata dal canvas (stesso frame)
-      const cv = this.renderer.domElement;
-      const fr = this.frameRect;
-      const sx = Math.round(fr.x0 * cv.width), sy = Math.round(fr.y0 * cv.height);
-      const sw = Math.round((fr.x1 - fr.x0) * cv.width), shh = Math.round((fr.y1 - fr.y0) * cv.height);
-      const out = this.captureShot(sx, sy, sw, shh, (sh as any).refMean) || (() => {
-        const o = document.createElement('canvas');
-        o.width = sw; o.height = shh;
-        o.getContext('2d')!.drawImage(cv, sx, sy, sw, shh, 0, 0, sw, shh);
-        return o;
-      })();
-      despeckle(out);
+      const add = this.readAdded();
       const resolve = sh.resolve;
       this.finishShot(sh.ptLights, (sh as any).prevBg);
-      resolve(out);
+      resolve(this.composeShot(add));
     }
   }
 
-  // luminanza media (lineare, già esposta) dell'anteprima, per allineare lo scatto
-  meanRender(): number {
-    const w = 160, h = Math.max(2, Math.round(160 / this.camera.aspect));
-    const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType });
-    this.renderer.setRenderTarget(rt);
-    this.renderer.render(this.scene, this.camera);
-    const buf = new Float32Array(w * h * 4);
-    this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
-    this.renderer.setRenderTarget(null);
-    rt.dispose();
-    return robustMean(buf, w * h);
-  }
-
-  // scatto letto dal buffer in virgola mobile del path tracer, esposto come l'anteprima
-  captureShot(sx: number, sy: number, sw: number, sh: number, refMean: number): HTMLCanvasElement | null {
+  // contributo delle luci aggiunte (lineare), ripulito dai puntini isolati
+  readAdded(): THREE.DataTexture | null {
     try {
       const tgt = this.pt.target as THREE.WebGLRenderTarget;
-      const cv = this.renderer.domElement;
       const W = tgt.width, H = tgt.height;
       if (!W || !H) return null;
       const buf = new Float32Array(W * H * 4);
       this.renderer.readRenderTargetPixels(tgt, 0, 0, W, H, buf);
-      const kx = W / cv.width, ky = H / cv.height;
-      const x0 = Math.round(sx * kx), w = Math.max(1, Math.round(sw * kx));
-      const y0 = Math.round(sy * ky), h = Math.max(1, Math.round(sh * ky));
-      // ritaglio (il buffer è capovolto in verticale)
-      const crop = new Float32Array(w * h * 4);
-      for (let y = 0; y < h; y++) {
-        const srcRow = H - 1 - (y0 + y);
-        crop.set(buf.subarray((srcRow * W + x0) * 4, (srcRow * W + x0 + w) * 4), y * w * 4);
-      }
-      const ptMean = robustMean(crop, w * h);
-      let k = 1;
-      if (refMean > 0 && ptMean > 0) k = Math.min(1.5, Math.max(0.3, refMean / ptMean));
-      (window as any).__shotMatch = { refMean, ptMean, k };
-      const out = document.createElement('canvas');
-      out.width = w; out.height = h;
-      const ctx = out.getContext('2d')!;
-      const img = ctx.createImageData(w, h);
-      const d = img.data;
-      k *= this.exposure;
-      for (let i = 0; i < w * h; i++) {
-        const [r, g, b] = neutralTM(crop[i * 4] * k, crop[i * 4 + 1] * k, crop[i * 4 + 2] * k);
-        d[i * 4] = linToSrgb8(r); d[i * 4 + 1] = linToSrgb8(g); d[i * 4 + 2] = linToSrgb8(b); d[i * 4 + 3] = 255;
-      }
-      ctx.putImageData(img, 0, 0);
-      return out;
+      defirefly(buf, W, H);
+      const tex = new THREE.DataTexture(buf, W, H, THREE.RGBAFormat, THREE.FloatType);
+      tex.colorSpace = THREE.LinearSRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+      tex.needsUpdate = true;
+      return tex;
     } catch (e) {
       console.warn(e);
       return null;
     }
+  }
+
+  // compone lo scatto: anteprima senza le luci aggiunte + luci aggiunte in path tracing
+  composeShot(add: THREE.DataTexture | null): HTMLCanvasElement | null {
+    const s = this.snapshot;
+    if (!s) return null;
+    const hidden: THREE.Light[] = [];
+    if (add) {
+      for (const o of this.lightObjs.values()) if (o.state.origin === 'aggiunta' && o.raster.visible) { o.raster.visible = false; hidden.push(o.raster); }
+      // luce indiretta stimata solo dalle luci rimaste (quella delle aggiunte è nel path tracing)
+      this.snapshot = { ...s, lights: s.lights.filter((L) => L.origin !== 'aggiunta') };
+      this.updateIndirect();
+      this.snapshot = s;
+    }
+    const u = this.quadMat.uniforms;
+    const W = this.rt.width, H = this.rt.height;
+    const out = new THREE.WebGLRenderTarget(W, H, { type: THREE.UnsignedByteType });
+    let canvas: HTMLCanvasElement | null = null;
+    try {
+      this.camera.updateMatrixWorld();
+      this.renderer.setRenderTarget(this.rt);
+      this.renderer.render(this.scene, this.camera);
+      this.updateRelight();
+      u.tAdd.value = add; u.addW.value = add ? 1 : 0;
+      const prevMask = u.maskAlpha.value; u.maskAlpha.value = 1;
+      const prevFc = u.falseColor.value; u.falseColor.value = 0;
+      this.renderer.setRenderTarget(out);
+      this.renderer.render(this.quadScene, this.quadCam);
+      u.maskAlpha.value = prevMask; u.falseColor.value = prevFc;
+      const px = new Uint8Array(W * H * 4);
+      this.renderer.readRenderTargetPixels(out, 0, 0, W, H, px);
+      const fr = this.frameRect;
+      const x0 = Math.round(fr.x0 * W), y0 = Math.round(fr.y0 * H);
+      const w = Math.max(1, Math.round((fr.x1 - fr.x0) * W)), h = Math.max(1, Math.round((fr.y1 - fr.y0) * H));
+      canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      const img = ctx.createImageData(w, h);
+      // il buffer è dal basso verso l'alto; il rettangolo del formato è in coordinate UV (y in basso)
+      for (let y = 0; y < h; y++) {
+        const src = ((y0 + h - 1 - y) * W + x0) * 4;
+        img.data.set(px.subarray(src, src + w * 4), y * w * 4);
+      }
+      for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
+      ctx.putImageData(img, 0, 0);
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      this.renderer.setRenderTarget(null);
+      out.dispose();
+      u.tAdd.value = null; u.addW.value = 0;
+      add?.dispose();
+      for (const l of hidden) l.visible = true;
+      if (add) this.updateIndirect();
+      this.dirty = true;
+    }
+    return canvas;
   }
 
   cancelShot() {
@@ -1203,7 +1265,6 @@ export class Engine {
     this.ambient.visible = true;
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.toneMappingExposure = 1;
-    this.camera.apertureBlades = 0;
     this.shot = null;
     this.dirty = true;
   }
@@ -1280,30 +1341,22 @@ function linToSrgb8(v: number) {
   return Math.round((v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055) * 255);
 }
 
-// toglie i puntini isolati (fireflies) rimasti dal path tracing
-function despeckle(cv: HTMLCanvasElement) {
-  const ctx = cv.getContext('2d', { willReadFrequently: true })!;
-  const W = cv.width, H = cv.height;
-  const img = ctx.getImageData(0, 0, W, H);
-  const d = img.data, src = new Uint8ClampedArray(d);
+// toglie i puntini isolati (fireflies) rimasti dal path tracing, sul buffer lineare
+function defirefly(buf: Float32Array, W: number, H: number) {
   const lum = new Float32Array(W * H);
-  for (let i = 0; i < W * H; i++) lum[i] = 0.2126 * src[i * 4] + 0.7152 * src[i * 4 + 1] + 0.0722 * src[i * 4 + 2];
+  for (let i = 0; i < W * H; i++) lum[i] = 0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2];
   const nb = new Float32Array(8);
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
     const i = y * W + x;
     let n = 0;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) nb[n++] = lum[i + dy * W + dx];
-    const sorted = Array.from(nb).sort((a, b) => a - b);
-    const med = (sorted[3] + sorted[4]) / 2;
-    if (lum[i] > med + 28 && lum[i] > sorted[6] + 12) {
-      for (let c = 0; c < 3; c++) {
-        let acc = 0;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) acc += src[(i + dy * W + dx) * 4 + c];
-        d[i * 4 + c] = acc / 8;
-      }
+    nb.sort();
+    const med = (nb[3] + nb[4]) / 2;
+    if (lum[i] > med * 3 + 1e-4 && lum[i] > nb[6] * 1.5) {
+      const k = lum[i] > 0 ? (nb[6] / lum[i]) : 0;
+      for (let c = 0; c < 3; c++) buf[i * 4 + c] *= k;
     }
   }
-  ctx.putImageData(img, 0, 0);
 }
 
 // luminanza lineare media di una tela (miniatura)
