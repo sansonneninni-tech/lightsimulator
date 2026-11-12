@@ -17,7 +17,7 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     const W = innerWidth, H = innerHeight;
     let left = x, top = y;
     if (anchor === 'side') {
-      left = x + 44 + width < W - 16 ? x + 44 : x - 44 - width;
+      left = x + 56 + width < W - 16 ? x + 56 : x - 56 - width;
       top = y - 40;
     } else if (anchor === 'below') {
       left = x - width; top = y;

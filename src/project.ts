@@ -81,7 +81,12 @@ async function build(canvas: HTMLCanvasElement, depthIn: DepthResult | undefined
   });
   if (saved) {
     e.K = saved.K; e.skyCal = saved.skyCal;
-    useStore.setState({ lights, phase: 'ready', status: '' });
+    // riferimento con le luci lette, poi la scena salvata
+    useStore.setState({ lights: recon.lights, ambient: 0.18, sun: orientSunSaved(saved, recon) });
+    e.apply(snapshotOf()); e.updateEmissive(); e.syncSun(st().sun);
+    e.captureBase();
+    (e as any).baseSun = st().sun;
+    useStore.setState({ lights, sun, ambient: saved.scene.ambient, phase: 'ready', status: '' });
     e.apply(snapshotOf());
     return;
   }
@@ -89,7 +94,11 @@ async function build(canvas: HTMLCanvasElement, depthIn: DepthResult | undefined
   useStore.setState({ lights });
   e.apply(snapshotOf());
   const exp = e.calibrate();
-  useStore.setState({ cam: { ...st().cam, ...exp }, lights: [] });
+  useStore.setState({ cam: { ...st().cam, ...exp } });
+  e.updateEmissive(); e.syncSun(st().sun);
+  e.captureBase();
+  (e as any).baseSun = st().sun;
+  useStore.setState({ lights: [] });
   // le luci trovate si accendono una alla volta
   useStore.setState({ phase: 'ready', status: 'Trovo le fonti di luce…' });
   for (const L of lights) {
@@ -106,6 +115,11 @@ async function build(canvas: HTMLCanvasElement, depthIn: DepthResult | undefined
   if (depth.source === 'stima') st().showToast('Profondità stimata senza il lettore: la stanza è approssimata. Con la connessione il risultato è più preciso.');
   await sleep(2200);
   useStore.setState({ status: '', past: [], future: [] });
+}
+
+// il sole com'era quando la foto è stata letta (salvato con il progetto se presente)
+function orientSunSaved(saved: any, recon: Reconstruction) {
+  return saved.baseSun || saved.scene.sun || orientSun(recon);
 }
 
 export function snapshotOf(): SceneSnapshot {
@@ -136,7 +150,7 @@ export function saveProject() {
     photo: r.photo.toDataURL('image/jpeg', 0.92),
     depth: { width: r.depthGrid.width, height: r.depthGrid.height, metric: r.depthGrid.metric, data: f32ToB64(Float32Array.from(r.depthGrid.data)) },
     focal35: r.focal35, readIds: r.lights.map((l) => l.id),
-    K: e.K, skyCal: e.skyCal,
+    K: e.K, skyCal: e.skyCal, baseSun: (e as any).baseSun,
     scene: snapshotOf(),
     shots: s.shots,
   };

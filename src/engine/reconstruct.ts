@@ -78,18 +78,22 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
       z[k] = 1 / (d * (1 / zn - 1 / zf) + 1 / zf);
     }
   }
+  // filtro bilaterale (due passate 5x5): liscia le superfici, tiene netti i salti di profondità
   const zs = new Float32Array(n);
-  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
-    const c = z[j * gw + i];
-    let s = 0, w = 0;
-    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
-      const ii = Math.min(gw - 1, Math.max(0, i + di)), jj = Math.min(gh - 1, Math.max(0, j + dj));
-      const q = z[jj * gw + ii];
-      if (Math.abs(q - c) / c < 0.05) { const ww = di === 0 && dj === 0 ? 2 : 1; s += q * ww; w += ww; }
+  for (let pass = 0; pass < 2; pass++) {
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+      const c = z[j * gw + i];
+      let s = 0, w = 0;
+      for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+        const ii = Math.min(gw - 1, Math.max(0, i + di)), jj = Math.min(gh - 1, Math.max(0, j + dj));
+        const q = z[jj * gw + ii];
+        const r = Math.abs(q - c) / c;
+        if (r < 0.06) { const ww = Math.exp(-(di * di + dj * dj) / 4.5) * (1 - r / 0.06); s += q * ww; w += ww; }
+      }
+      zs[j * gw + i] = w > 0 ? s / w : c;
     }
-    zs[j * gw + i] = s / w;
+    z.set(zs);
   }
-  z.set(zs);
 
   // punti nello spazio camera (camera guarda -Z, Y in alto)
   const pc = new Float32Array(n * 3);
@@ -277,7 +281,8 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
   const merged: typeof comps = [];
   for (const cmp of comps.sort((a, b) => b.px.length - a.px.length)) {
     if (cmp.px.length < 3) continue;
-    const m = merged.find((o) => cmp.x0 <= o.x1 + 3 && cmp.x1 >= o.x0 - 3 && cmp.y0 <= o.y1 + 3 && cmp.y1 >= o.y0 - 3);
+    const gap = Math.max(3, Math.round(W * 0.02));
+    const m = merged.find((o) => cmp.x0 <= o.x1 + gap && cmp.x1 >= o.x0 - gap && cmp.y0 <= o.y1 + gap && cmp.y1 >= o.y0 - gap);
     if (m) { m.px.push(...cmp.px); m.x0 = Math.min(m.x0, cmp.x0); m.x1 = Math.max(m.x1, cmp.x1); m.y0 = Math.min(m.y0, cmp.y0); m.y1 = Math.max(m.y1, cmp.y1); }
     else merged.push({ ...cmp, px: [...cmp.px] });
   }
@@ -323,13 +328,16 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
   // 1) finestre: grandi zone chiare su superfici verticali
   const windowBoxes: [number, number, number, number][] = [];
   const pointCands: typeof merged = [];
+  const dbg: any[] = [];
+  (globalThis as any).__det = dbg;
   for (const cmp of merged) {
     const area = cmp.px.length / (W * H);
     const bw = cmp.x1 - cmp.x0 + 1, bh = cmp.y1 - cmp.y0 + 1;
     const fill = cmp.px.length / (bw * bh);
     const u0 = cmp.x0 / W, v0 = cmp.y0 / H, u1 = (cmp.x1 + 1) / W, v1 = (cmp.y1 + 1) / H;
     const cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
-    const big = (area > 0.012 && fill > 0.35) || area > 0.04;
+    const big = (area > 0.012 && fill > 0.35) || (area > 0.006 && fill > 0.75 && bh > bw * 1.2) || area > 0.04;
+    dbg.push({ bb: [u0, v0, u1, v1].map((x) => +x.toFixed(3)), area: +area.toFixed(4), fill: +fill.toFixed(2), big, ring: +ringLuma(cmp).toFixed(2) });
     if (!big) { pointCands.push(cmp); continue; }
     if (windows.length >= 4) continue;
     // profondità del muro attorno alla finestra (anello esterno)
@@ -353,6 +361,7 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     const width = Math.max(0.3, right.length()), height = Math.max(0.3, up.length());
     up.normalize();
     // riflessi su tavoli e pavimenti: la "finestra" sarebbe orizzontale
+    dbg[dbg.length - 1].win = { upy: +up.y.toFixed(2), cv: +cv.toFixed(2), cy: +center.y.toFixed(2), d: [dl, dr, dt, db].map((x) => +x.toFixed(2)) };
     if (Math.abs(up.y) < 0.6 || cv > 0.78 || center.y < 0.3) continue;
     const normal = new THREE.Vector3().subVectors(g.camPos, center);
     normal.y = 0; if (normal.lengthSq() < 1e-4) normal.set(0, 0, 1); normal.normalize();
@@ -388,7 +397,11 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     .filter(({ cmp, ring }) => {
       const cu = (cmp.x0 + cmp.x1 + 1) / 2 / W, cv = (cmp.y0 + cmp.y1 + 1) / 2 / H;
       if (windowBoxes.some((b) => cu > b[0] && cu < b[2] && cv > b[1] && cv < b[3])) return false;
-      return ring < (cv < 0.4 ? 0.75 : 0.55) && cmp.px.length >= 3;
+      const bw = cmp.x1 - cmp.x0 + 1, bh = cmp.y1 - cmp.y0 + 1;
+      const compact = cmp.px.length / (bw * bh) > 0.6 && Math.max(bw / bh, bh / bw) < 2.5;
+      // una lampada compatta e satura resta una sorgente anche davanti a un muro chiaro
+      const lim = compact && cv < 0.6 ? 0.88 : cv < 0.4 ? 0.75 : 0.55;
+      return ring < lim && cmp.px.length >= 3;
     })
     .sort((a, b) => b.cmp.px.length * (1 - b.ring) - a.cmp.px.length * (1 - a.ring));
   let count = 0;
@@ -401,8 +414,15 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     const kelvin = Math.round(avgColor(cmp) / 100) * 100;
     // sorgente puntiforme: profondità mediana dei suoi pixel
     const depths = cmp.px.map((q) => g.camDepth[gridIndex((q % W + 0.5) / W, (((q / W) | 0) + 0.5) / H)]);
-    const dep = Math.max(0.4, median(depths) * 0.97);
+    // i modelli di profondità avvicinano le sorgenti piccole e brillanti: si usa anche lo sfondo attorno
+    const pad = Math.max(2, Math.round(Math.max(bw, bh) * 0.8));
+    const ringD: number[] = [];
+    for (let y = Math.max(0, cmp.y0 - pad); y <= Math.min(H - 1, cmp.y1 + pad); y += 1)
+      for (let x = Math.max(0, cmp.x0 - pad); x <= Math.min(W - 1, cmp.x1 + pad); x += 1)
+        if (x < cmp.x0 || x > cmp.x1 || y < cmp.y0 || y > cmp.y1) ringD.push(g.camDepth[gridIndex((x + 0.5) / W, (y + 0.5) / H)]);
+    const dep = Math.max(0.4, median(depths) * 0.97, ringD.length ? median(ringD) * 0.75 : 0);
     const pos = unproject(cu, cv, dep);
+    dbg.push({ pt: [cu, cv].map((x) => +x.toFixed(2)), posy: +pos.y.toFixed(2), dep: +dep.toFixed(2) });
     if (pos.y < 0.8) continue; // riflessi su pavimenti e tavoli
     const isCeiling = cv < 0.25 && pos.y > 1.9;
     const elongated = bw / bh > 4 || bh / bw > 4;
@@ -411,7 +431,7 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     if (area > 0.004 && !elongated) fixtureId = 'bulb-150';
     const target = pos.clone().add(new THREE.Vector3(0, -1, 0));
     const L = makeLight(fixtureId, pos.toArray() as any, target.toArray() as any, {
-      name: isCeiling ? 'Plafoniera' : elongated ? 'Neon' : 'Lampada',
+      name: isCeiling ? 'Luce a soffitto' : elongated ? 'Neon' : 'Lampada',
       origin: 'letta',
       kelvin: Math.min(6500, Math.max(2200, kelvin)),
     });
@@ -423,6 +443,7 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     masks.push({ lightId: L.id, rect: [u0, v0, u1, v1], mask: makeMask(cmp, W, H) });
     count++;
   }
+  if (windows.length === 1) for (const L of lights) if (L.origin === 'finestra') L.name = 'Finestra';
   // numerazione nomi
   const counts: Record<string, number> = {};
   for (const L of lights) {

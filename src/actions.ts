@@ -76,8 +76,15 @@ export function addLight(type: string, at?: THREE.Vector3) {
   const angle = THREE.MathUtils.degToRad(40) * side;
   const dir = toCam.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
   const dist = fx.kind === 'spot' ? 3.2 : fx.kind === 'point' ? 1.3 : 2.2;
-  const pos = subject.clone().addScaledVector(dir, dist);
+  let pos = subject.clone().addScaledVector(dir, dist);
   pos.y = fx.kind === 'point' ? Math.max(1.2, subject.y) : subject.y + (fx.family === 'Tubo' ? 0.3 : 0.7);
+  if (!at && e) {
+    // compare dentro la vista, nel terzo superiore centrale, già puntata sul soggetto
+    const r = e.renderer.domElement.getBoundingClientRect();
+    const d = camPos.distanceTo(subject);
+    const ray = e.rayPlane(r.left + r.width * (0.5 + side * 0.12), r.top + r.height * 0.28, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(0.9, Math.min(d - 0.8, d * 0.55)))));
+    if (ray) pos = ray;
+  }
   clampToRoom(pos, 0.3);
   const num = s.lights.filter((l) => familyType(l.fixtureId) === type && l.origin !== 'finestra').length + 1;
   const L = makeLight(fixtureId, pos.toArray() as any, subject.toArray() as any, { name: `${type} ${num}` });

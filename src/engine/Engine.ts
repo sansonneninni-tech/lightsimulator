@@ -24,6 +24,8 @@ const QUAD_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(p
 const QUAD_FRAG = `
 precision highp float;
 uniform sampler2D tDiffuse; uniform float exposure; uniform int falseColor; uniform vec4 frame; uniform float maskAlpha;
+uniform sampler2D tPhoto; uniform sampler2D tBase; uniform sampler2D tCur; uniform sampler2D tMask;
+uniform float relightW; uniform float photoK; uniform vec2 texel; uniform mat4 invProj; uniform mat3 camRot; uniform mat3 photoRotInv; uniform mat4 photoProj;
 varying vec2 vUv;
 vec3 neutral(vec3 color){
   const float startCompression = 0.8 - 0.04; const float desaturation = 0.15;
@@ -40,7 +42,34 @@ vec3 neutral(vec3 color){
 }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(vec3(0.0031308), c)); }
 void main(){
-  vec3 c = max(texture2D(tDiffuse, vUv).rgb * exposure, 0.0);
+  vec3 scene = texture2D(tDiffuse, vUv).rgb;
+  if (relightW > 0.0) {
+    // dal punto di vista della foto: la foto stessa, più (o meno) ciò che cambia nelle luci
+    vec4 v = invProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+    vec3 dir = camRot * (v.xyz / v.w);
+    vec4 cl = photoProj * vec4(photoRotInv * dir, 1.0);
+    if (cl.w > 0.0) {
+      vec2 puv = cl.xy / cl.w * 0.5 + 0.5;
+      float edge = smoothstep(0.0, 0.015, min(min(puv.x, 1.0 - puv.x), min(puv.y, 1.0 - puv.y)));
+      if (edge > 0.0) {
+        // differenza ammorbidita: i cambi di luce sono morbidi, l'aliasing delle ombre no
+        vec3 cur = vec3(0.0), base = vec3(0.0);
+        for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
+          vec2 o = vec2(float(i), float(j)) * texel * 1.5;
+          cur += texture2D(tCur, puv + o).rgb; base += texture2D(tBase, puv + o).rgb;
+        }
+        cur /= 9.0; base /= 9.0;
+        vec3 photo = texture2D(tPhoto, puv).rgb * photoK;
+        // luce tolta: la foto si scurisce in proporzione; luce aggiunta: si somma
+        float eps = 0.02 * photoK;
+        vec3 down = photo * (min(cur, base) + eps) / (base + eps);
+        vec3 relit = down + max(cur - base, 0.0);
+        relit = mix(relit, texture2D(tCur, puv).rgb, texture2D(tMask, puv).r);
+        scene = mix(scene, relit, relightW * edge);
+      }
+    }
+  }
+  vec3 c = max(scene * exposure, 0.0);
   vec3 s = toSRGB(clamp(neutral(c), 0.0, 1.0));
   if (falseColor == 1) {
     float y = dot(s, vec3(0.2126, 0.7152, 0.0722)) * 100.0;
@@ -105,6 +134,15 @@ export class Engine {
   keys = new Set<string>();
   yaw = 0; pitch = 0;
   albedoMean = 0.5;
+  // vista dalla foto: foto proiettata + differenza di illuminazione
+  photoCam = new THREE.PerspectiveCamera(50, 1, 0.03, 200);
+  baseRT: THREE.WebGLRenderTarget | null = null;
+  curRT: THREE.WebGLRenderTarget | null = null;
+  maskRT: THREE.WebGLRenderTarget | null = null;
+  relightPhotoTex: THREE.Texture | null = null;
+  hasBase = false;
+  maskBlack = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+  maskWhite = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
   shotRestore: (() => void) | null = null;
   homePose: { pos: THREE.Vector3; quat: THREE.Quaternion; fov: number } | null = null;
   pt: any = null;
@@ -127,7 +165,9 @@ export class Engine {
     this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4, colorSpace: THREE.LinearSRGBColorSpace });
     this.quadMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT, fragmentShader: QUAD_FRAG, depthTest: false, depthWrite: false,
-      uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 } },
+      uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 },
+        tPhoto: { value: null }, tBase: { value: null }, tCur: { value: null }, tMask: { value: null }, relightW: { value: 0 }, photoK: { value: 1 }, texel: { value: new THREE.Vector2(0.001, 0.001) },
+        invProj: { value: new THREE.Matrix4() }, camRot: { value: new THREE.Matrix3() }, photoRotInv: { value: new THREE.Matrix3() }, photoProj: { value: new THREE.Matrix4() } },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.quadMat);
     this.quad.frustumCulled = false;
@@ -196,7 +236,8 @@ export class Engine {
     const w = Math.max(1, this.container.clientWidth), h = Math.max(1, this.container.clientHeight);
     const tanV = Math.tan(THREE.MathUtils.degToRad(this.recon.camera.fov) / 2);
     // vogliamo che la foto riempia l'altezza del canvas: tanHalfV(canvas) = tanV
-    const tanHalfH = tanV * (w / h);
+    // la foto copre tutto lo schermo (come "cover"): si taglia il lato in eccesso
+    const tanHalfH = tanV * Math.min(w / h, this.recon.camera.aspect);
     return sensor.width / (2 * tanHalfH);
   }
 
@@ -263,34 +304,47 @@ export class Engine {
     for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) { const k = j * gw + i; uv[k * 2] = i / (gw - 1); uv[k * 2 + 1] = 1 - j / (gh - 1); }
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     const idx: number[] = [];
+    const fill: number[] = []; // salti di profondità: superfici di raccordo sfocate al posto dei buchi
     const ta = new THREE.Vector3(), tb = new THREE.Vector3(), tc = new THREE.Vector3(), tn = new THREE.Vector3(), tv = new THREE.Vector3();
     const camP = new THREE.Vector3(...recon.camera.position);
     const inWindow = (u: number, v: number) => recon.windows.some((w) => u > w.bbox[0] - 0.004 && u < w.bbox[2] + 0.004 && v > w.bbox[1] - 0.004 && v < w.bbox[3] + 0.004);
     for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
       const a = j * gw + i, b = a + 1, c = a + gw, d = c + 1;
-      const za = camDepth[a], zb = camDepth[b], zc = camDepth[c], zd = camDepth[d];
-      const mx = Math.max(za, zb, zc, zd), mn = Math.min(za, zb, zc, zd);
-      if (mx / mn > 1.09 + 0.012 * mn) continue;
       if (inWindow((i + 0.5) / (gw - 1), (j + 0.5) / (gh - 1))) continue;
-      // triangoli quasi paralleli allo sguardo della foto: stirati, meglio un buco
-      ta.set(world[a * 3], world[a * 3 + 1], world[a * 3 + 2]);
-      tb.set(world[b * 3], world[b * 3 + 1], world[b * 3 + 2]);
-      tc.set(world[c * 3], world[c * 3 + 1], world[c * 3 + 2]);
-      tn.subVectors(tb, ta).cross(tc.clone().sub(ta));
-      const ln = tn.length();
-      if (ln > 1e-9) {
-        tv.copy(ta).sub(camP).normalize();
-        if (Math.abs(tn.dot(tv) / ln) < 0.06) continue;
-      }
-      idx.push(a, c, b, b, c, d);
+      // per triangolo (bordi più fini): salti di profondità e triangoli stirati diventano buchi
+      const tri = (p: number, q: number, r: number) => {
+        const zp = camDepth[p], zq = camDepth[q], zr = camDepth[r];
+        const mx = Math.max(zp, zq, zr), mn = Math.min(zp, zq, zr);
+        if (mx / mn > 1.08 + 0.012 * mn) { if (mx / mn < 1.9) fill.push(p, q, r); return; }
+        ta.set(world[p * 3], world[p * 3 + 1], world[p * 3 + 2]);
+        tb.set(world[q * 3], world[q * 3 + 1], world[q * 3 + 2]);
+        tc.set(world[r * 3], world[r * 3 + 1], world[r * 3 + 2]);
+        tn.subVectors(tb, ta).cross(tc.sub(ta));
+        const ln = tn.length();
+        if (ln > 1e-9) {
+          tv.copy(ta).sub(camP).normalize();
+          if (Math.abs(tn.dot(tv) / ln) < 0.06) { fill.push(p, q, r); return; }
+        }
+        idx.push(p, q, r);
+      };
+      tri(a, c, b); tri(b, c, d);
     }
     geo.setIndex(idx);
     geo.computeVertexNormals();
+    // raccordi: stessa griglia, nessuna ombra portata
+    const fgeo = new THREE.BufferGeometry();
+    fgeo.setAttribute('position', geo.attributes.position);
+    fgeo.setAttribute('uv', geo.attributes.uv);
+    fgeo.setIndex(fill);
+    fgeo.computeVertexNormals();
+    const fillMesh = new THREE.Mesh(fgeo, this.blurMaterial);
+    fillMesh.name = 'raccordi';
+    fillMesh.castShadow = false; fillMesh.receiveShadow = true;
     (geo as any).computeBoundsTree();
     const depthMesh = new THREE.Mesh(geo, mat);
     depthMesh.name = 'stanza';
     depthMesh.castShadow = true; depthMesh.receiveShadow = true;
-    this.room.add(depthMesh);
+    this.room.add(depthMesh, fillMesh);
     this.surfaces.push(depthMesh);
 
     // ---- scatola della stanza (per girare liberamente) ----
@@ -328,6 +382,7 @@ export class Engine {
       fov: recon.camera.fov,
     };
     this.resetView();
+    this.setupRelight(recon);
     // ombre del sole: la camera d'ombra copre la stanza
     const size = new THREE.Vector3(recon.room.max[0] - recon.room.min[0], recon.room.max[1] - recon.room.min[1], recon.room.max[2] - recon.room.min[2]);
     const r = size.length() / 2 + 0.5;
@@ -504,7 +559,7 @@ export class Engine {
       const bd = L.barnDoors;
       const hasDoors = wantKind === 'spot' && (bd.top || bd.bottom || bd.left || bd.right);
       if (hasDoors) {
-        if (!o.doors) { o.doors = makeDoors(); this.scene.add(o.doors); }
+        if (!o.doors) { o.doors = makeDoors(); o.doors.traverse((q) => q.layers.enable(1)); this.scene.add(o.doors); }
         updateDoors(o.doors, L);
       } else if (o.doors) { this.scene.remove(o.doors); o.doors = null; }
     }
@@ -544,6 +599,7 @@ export class Engine {
       if (!o || o.state.skin !== p.skin) {
         if (o) this.scene.remove(o.obj);
         const obj = buildMannequin(p);
+        obj.traverse((o) => o.layers.enable(1));
         this.scene.add(obj);
         this.people.set(p.id, { state: p, obj });
       } else {
@@ -561,6 +617,7 @@ export class Engine {
       if (!o || o.state.kind !== p.kind) {
         if (o) this.scene.remove(o.obj);
         o = { state: p, obj: buildProp(p) };
+        o.obj.traverse((q) => q.layers.enable(1));
         this.scene.add(o.obj);
         this.props.set(p.id, o);
       }
@@ -873,9 +930,73 @@ export class Engine {
     this.camera.updateMatrixWorld();
     this.renderer.setRenderTarget(this.rt);
     this.renderer.render(this.scene, this.camera);
+    this.updateRelight();
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.quadScene, this.quadCam);
     this.onFrame?.();
+  }
+
+  setupRelight(recon: Reconstruction) {
+    const pw = Math.min(1280, recon.photo.width), ph = Math.max(2, Math.round(pw / recon.camera.aspect));
+    const mk = () => new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, colorSpace: THREE.LinearSRGBColorSpace });
+    for (const t of [this.baseRT, this.curRT, this.maskRT]) t?.dispose();
+    this.baseRT = mk(); this.curRT = mk(); this.maskRT = mk();
+    this.relightPhotoTex?.dispose();
+    const t = new THREE.CanvasTexture(recon.photo);
+    t.colorSpace = THREE.SRGBColorSpace;
+    this.relightPhotoTex = t;
+    const pc = this.photoCam;
+    pc.position.set(...recon.camera.position);
+    pc.quaternion.set(...recon.camera.quaternion);
+    pc.fov = recon.camera.fov; pc.aspect = recon.camera.aspect;
+    pc.updateProjectionMatrix(); pc.updateMatrixWorld();
+    const u = this.quadMat.uniforms;
+    u.tPhoto.value = t; u.tBase.value = this.baseRT.texture; u.tCur.value = this.curRT.texture; u.tMask.value = this.maskRT.texture;
+    u.photoProj.value.copy(pc.projectionMatrix);
+    u.texel.value.set(1 / pw, 1 / ph);
+    u.photoRotInv.value.setFromMatrix4(pc.matrixWorld).transpose();
+    this.hasBase = false;
+    u.relightW.value = 0;
+  }
+
+  // riferimento: la scena con le luci lette, come nella foto
+  captureBase() {
+    if (!this.baseRT) return;
+    this.renderer.setRenderTarget(this.baseRT);
+    this.renderer.render(this.scene, this.photoCam);
+    this.renderer.setRenderTarget(null);
+    this.hasBase = true;
+    this.dirty = true;
+  }
+
+  updateRelight() {
+    const u = this.quadMat.uniforms;
+    let w = 0;
+    if (this.hasBase && this.homePose && this.curRT && this.maskRT && !this.shot) {
+      const d = this.camera.position.distanceTo(this.homePose.pos);
+      w = 1 - THREE.MathUtils.smoothstep(d, 0.03, 0.4);
+    }
+    u.relightW.value = w;
+    if (w <= 0) return;
+    const r = this.renderer;
+    r.setRenderTarget(this.curRT);
+    r.render(this.scene, this.photoCam);
+    // maschera: persone e oggetti aggiunti coprono la foto
+    const prevBg = this.scene.background, prevOv = this.scene.overrideMaterial;
+    this.scene.background = new THREE.Color(0, 0, 0);
+    r.setRenderTarget(this.maskRT);
+    this.scene.overrideMaterial = this.maskBlack;
+    r.render(this.scene, this.photoCam);
+    this.scene.overrideMaterial = this.maskWhite;
+    const ac = r.autoClear; r.autoClear = false;
+    this.photoCam.layers.set(1);
+    r.render(this.scene, this.photoCam);
+    this.photoCam.layers.set(0);
+    r.autoClear = ac;
+    this.scene.overrideMaterial = prevOv; this.scene.background = prevBg;
+    u.photoK.value = this.K;
+    u.invProj.value.copy(this.camera.projectionMatrixInverse);
+    u.camRot.value.setFromMatrix4(this.camera.matrixWorld);
   }
 
   // ---------------- scatto (path tracing) ----------------
