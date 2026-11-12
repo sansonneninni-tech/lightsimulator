@@ -21,6 +21,7 @@ export interface CamState {
   shutter: number;
   aspect: string;
   falseColor: boolean;
+  focus?: number; // metri; 0 o assente = automatico
 }
 
 export interface Shot {
@@ -71,7 +72,7 @@ interface Store extends SceneSnapshot {
   showToast: (text: string) => void;
 }
 
-export const defaultCam = (): CamState => ({ focal: 24, sensor: 's35', iso: 800, fStop: 2.8, shutter: 1 / 50, aspect: 'free', falseColor: false });
+export const defaultCam = (): CamState => ({ focal: 24, sensor: 's35', iso: 800, fStop: 2.8, shutter: 1 / 50, aspect: 'free', falseColor: false, focus: 0 });
 
 const snap = (s: SceneSnapshot): string =>
   JSON.stringify({ lights: s.lights, people: s.people, props: s.props, sun: s.sun, cam: s.cam, ambient: s.ambient });

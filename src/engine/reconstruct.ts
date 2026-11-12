@@ -31,6 +31,7 @@ export interface Reconstruction {
   depthSource: string;
   depthGrid: { width: number; height: number; data: number[]; metric: boolean };
   focal35: number;
+  extras: import('./register').ExtraView[]; // foto in più allineate alla prima
 }
 
 const srgbToLin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -45,13 +46,14 @@ function sampleBilinear(d: DepthResult, u: number, v: number) {
   return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + e * fx) * fy;
 }
 
-function percentile(arr: Float32Array | number[], p: number) {
+export function percentile(arr: Float32Array | number[], p: number) {
   const a = Array.from(arr).filter((x) => isFinite(x)).sort((x, y) => x - y);
   if (!a.length) return 0;
   return a[Math.min(a.length - 1, Math.max(0, Math.floor((p / 100) * (a.length - 1))))];
 }
 
-export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal35 = 26): Reconstruction {
+// profondità camera (metri approssimati) su una griglia, dalla foto e dalla profondità letta
+export function cameraDepth(photo: HTMLCanvasElement, depth: DepthResult, focal35 = 26) {
   const aspect = photo.width / photo.height;
   // campo visivo dal 35 mm equivalente (lato lungo = 36 mm)
   const longFov = 2 * Math.atan(36 / (2 * focal35));
@@ -64,7 +66,6 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
   const n = gw * gh;
   const z = new Float32Array(n);
 
-  // smussa leggermente la profondità (3x3) preservando i bordi
   const raw = new Float32Array(n);
   for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) raw[j * gw + i] = sampleBilinear(depth, (i + 0.5) / gw, (j + 0.5) / gh);
 
@@ -94,6 +95,12 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
     }
     z.set(zs);
   }
+  return { gw, gh, z, tanH, tanV, aspect };
+}
+
+export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal35 = 26): Reconstruction {
+  const { gw, gh, z, tanH, tanV, aspect } = cameraDepth(photo, depth, focal35);
+  const n = gw * gh;
 
   // punti nello spazio camera (camera guarda -Z, Y in alto)
   const pc = new Float32Array(n * 3);
@@ -110,6 +117,7 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
   const cand: number[] = [];
   for (let j = Math.floor(gh * 0.6); j < gh; j += 2) for (let i = 0; i < gw; i += 2) cand.push(j * gw + i);
   let bestN = new THREE.Vector3(0, 1, 0), bestD = 0, bestCount = 0;
+  const hyps: { n: THREE.Vector3; d: number; count: number }[] = [];
   const P = (k: number) => new THREE.Vector3(pc[k * 3], pc[k * 3 + 1], pc[k * 3 + 2]);
   const medZ = percentile(z, 50);
   const tol = 0.025 * medZ;
@@ -130,7 +138,21 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
       const dist = nn.x * pc[k * 3] + nn.y * pc[k * 3 + 1] + nn.z * pc[k * 3 + 2] + dd;
       if (Math.abs(dist) < tol) count++;
     }
+    hyps.push({ n: nn, d: dd, count });
     if (count > bestCount) { bestCount = count; bestN = nn; bestD = dd; }
+  }
+  // il pavimento è il piano orizzontale più basso con un buon supporto: una scrivania o un
+  // tavolo in primo piano hanno spesso più punti, ma stanno più in alto
+  const good = hyps.filter((h) => h.count >= bestCount * 0.45 && h.count > cand.length * 0.08);
+  if (good.length) {
+    const lowD = Math.max(...good.map((h) => h.d));
+    // una scrivania sta poco sotto la camera e il pavimento più in basso; molto più
+    // in basso è un altro piano (una balconata che guarda un atrio): lì non si scende
+    const ratio = lowD / bestD;
+    if (ratio > 1.15 && ratio < 1.8) {
+      const same = good.filter((h) => h.d > lowD * 0.95).sort((x, y) => y.count - x.count)[0];
+      bestN = same.n; bestD = same.d; bestCount = same.count;
+    }
   }
   const camHeight = 1.6;
   const rot = new THREE.Quaternion();
@@ -166,8 +188,8 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
   for (let k = 0; k < n; k++) { xs[k] = world[k * 3]; ys[k] = world[k * 3 + 1]; zz[k] = world[k * 3 + 2]; }
   const clampR = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
   const room = {
-    min: [clampR(percentile(xs, 1) - 0.08, -15, -1.2), 0, clampR(percentile(zz, 1) - 0.08, -30, -2)] as [number, number, number],
-    max: [clampR(percentile(xs, 99) + 0.08, 1.2, 15), clampR(Math.max(percentile(ys, 99.5) + 0.05, 2.6), 2.4, 8), 2.5] as [number, number, number],
+    min: [clampR(percentile(xs, 0.5) - 0.15, -15, -1.2), 0, clampR(percentile(zz, 0.5) - 0.15, -30, -2)] as [number, number, number],
+    max: [clampR(percentile(xs, 99.5) + 0.15, 1.2, 15), clampR(Math.max(percentile(ys, 99.5) + 0.05, 2.6), 2.4, 8), 2.5] as [number, number, number],
   };
 
   const camQuat = rot.clone();
@@ -189,11 +211,12 @@ export function reconstruct(photo: HTMLCanvasElement, depth: DepthResult, focal3
     depthSource: depth.source,
     depthGrid: { width: depth.width, height: depth.height, data: Array.from(depth.data), metric: depth.metric },
     focal35,
+    extras: [],
   };
 }
 
 // Albedo approssimato: divide la foto per l'illuminazione a bassa frequenza
-function makeAlbedo(photo: HTMLCanvasElement) {
+export function makeAlbedo(photo: HTMLCanvasElement) {
   const W = Math.min(2048, photo.width), H = Math.round((W * photo.height) / photo.width);
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const ctx = c.getContext('2d', { willReadFrequently: true })!;
@@ -236,9 +259,9 @@ function makeAlbedo(photo: HTMLCanvasElement) {
   return c;
 }
 
-interface DetCtx { gw: number; gh: number; world: Float32Array; camDepth: Float32Array; tanH: number; tanV: number; camQuat: THREE.Quaternion; camPos: THREE.Vector3 }
+export interface DetCtx { gw: number; gh: number; world: Float32Array; camDepth: Float32Array; tanH: number; tanV: number; camQuat: THREE.Quaternion; camPos: THREE.Vector3 }
 
-function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
+export function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
   const W = 256, H = Math.max(2, Math.round((W * photo.height) / photo.width));
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const ctx = c.getContext('2d', { willReadFrequently: true })!;
@@ -363,6 +386,8 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     // riflessi su tavoli e pavimenti: la "finestra" sarebbe orizzontale
     dbg[dbg.length - 1].win = { upy: +up.y.toFixed(2), cv: +cv.toFixed(2), cy: +center.y.toFixed(2), d: [dl, dr, dt, db].map((x) => +x.toFixed(2)) };
     if (Math.abs(up.y) < 0.6 || cv > 0.78 || center.y < 0.3) continue;
+    // superficie orizzontale chiara (piano di una scrivania, tavolo bianco): non è una finestra
+    if (horizontalShare(cmp, W, g) > 0.6) continue;
     const normal = new THREE.Vector3().subVectors(g.camPos, center);
     normal.y = 0; if (normal.lengthSq() < 1e-4) normal.set(0, 0, 1); normal.normalize();
     // normale del muro dalla direzione orizzontale dei bordi
@@ -472,6 +497,26 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     lights.push(makeLight(READ_FIXTURES.generic, pos.toArray() as any, target.toArray() as any, { name: 'Luce ambiente', origin: 'letta', kelvin: 4300 }));
   }
   return { lights, windows, masks, meanLum };
+}
+
+// quota dei pixel della zona che stanno su superfici quasi orizzontali (dalla geometria letta)
+function horizontalShare(cmp: { px: number[] }, W: number, g: DetCtx) {
+  const H = Math.max(2, Math.round(cmp.px.length ? (g.gh / g.gw) * W : 2));
+  let hz = 0, n = 0;
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let t = 0; t < cmp.px.length; t += 3) {
+    const q = cmp.px[t];
+    const i = Math.min(g.gw - 2, Math.max(0, Math.round(((q % W) + 0.5) / W * (g.gw - 1))));
+    const j = Math.min(g.gh - 2, Math.max(0, Math.round((((q / W) | 0) + 0.5) / H * (g.gh - 1))));
+    const k = j * g.gw + i;
+    a.fromArray(g.world, k * 3); b.fromArray(g.world, (k + 1) * 3).sub(a); c.fromArray(g.world, (k + g.gw) * 3).sub(a);
+    const nrm = b.cross(c);
+    const l = nrm.length();
+    if (l < 1e-9) continue;
+    n++;
+    if (Math.abs(nrm.y / l) > 0.75) hz++;
+  }
+  return n ? hz / n : 0;
 }
 
 function makeMask(cmp: { px: number[] }, W: number, H: number) {

@@ -12,6 +12,9 @@ import { LIGHT_TYPES, addLight, addPerson, addProp } from '../actions';
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
 
+const FOCUS_VALUES = [0, 0.5, 0.7, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 1000];
+const fmtFocus = (v: number) => (!v ? 'fuoco auto' : v >= 1000 ? 'fuoco ∞' : `fuoco ${v.toLocaleString('it-IT')} m`);
+
 export type PanelId = 'lights' | 'people' | 'camera' | 'sky' | 'place' | null;
 
 function dockAnchor() {
@@ -113,16 +116,17 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
   const set = (p: any) => useStore.setState({ cam: { ...useStore.getState().cam, ...p } });
   const focals = [...new Set([...FOCALS, Math.round(cam.focal)])].sort((x, y) => x - y);
   return (
-    <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={480} onClose={onClose}>
+    <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={560} onClose={onClose}>
       <h3>Camera</h3>
       <div className="cam num">
         <DragValue values={focals} value={Math.round(cam.focal)} fmt={(v) => `${v} mm`} onChange={(v) => set({ focal: v })} /><span className="d">·</span>
         <DragValue values={SENSORS.map((s) => s.id)} value={cam.sensor} fmt={(v) => SENSORS.find((s) => s.id === v)!.name} onChange={(v) => set({ sensor: v })} /><span className="d">·</span>
         <DragValue values={ISO_VALUES} value={cam.iso} fmt={(v) => `ISO ${v}`} onChange={(v) => set({ iso: v })} /><span className="d">·</span>
         <DragValue values={FSTOPS} value={cam.fStop} fmt={(v) => `f/${fmtStop(v)}`} onChange={(v) => set({ fStop: v })} /><span className="d">·</span>
-        <DragValue values={SHUTTERS} value={cam.shutter} fmt={fmtShutter} onChange={(v) => set({ shutter: v })} />
+        <DragValue values={SHUTTERS} value={cam.shutter} fmt={fmtShutter} onChange={(v) => set({ shutter: v })} /><span className="d">·</span>
+        <DragValue values={FOCUS_VALUES} value={cam.focus || 0} fmt={fmtFocus} onChange={(v) => set({ focus: v })} />
       </div>
-      <div className="hint" style={{ margin: '4px 0 14px' }}>Trascina un valore a destra o a sinistra, o toccalo per il successivo.</div>
+      <div className="hint" style={{ margin: '4px 0 14px' }}>Trascina un valore a destra o a sinistra, o toccalo per il successivo. Il fuoco automatico segue la persona inquadrata o il centro.</div>
       <div className="line"><span>False color</span><div className={`toggle ${cam.falseColor ? 'on' : ''}`} onClick={() => set({ falseColor: !cam.falseColor })} /></div>
       <div className="line"><span>Esposimetro: tocca un punto della scena</span><div className={`toggle ${meter ? 'on' : ''}`} onClick={() => { useStore.setState({ meter: !meter, meterPin: null }); if (!meter) useStore.getState().showToast('Tocca un punto: ti dico lux e diaframma.'); }} /></div>
       <div className="row">
