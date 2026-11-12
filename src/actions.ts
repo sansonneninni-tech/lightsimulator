@@ -37,6 +37,16 @@ export function clampToRoom(p: THREE.Vector3, margin = 0.15) {
   return p;
 }
 
+// le luci si possono mettere ovunque: dentro, sopra, fuori dalla finestra (fino a 9 m dalla stanza)
+export function clampFree(p: THREE.Vector3) {
+  const { min, max } = room();
+  const m = 9;
+  p.x = Math.min(max[0] + m, Math.max(min[0] - m, p.x));
+  p.y = Math.min(max[1] + 6, Math.max(0.05, p.y));
+  p.z = Math.min(max[2] + m, Math.max(min[2] - m, p.z));
+  return p;
+}
+
 // punto di interesse: la prima persona, altrimenti ciò che c'è al centro dell'inquadratura
 export function subjectPoint(): THREE.Vector3 {
   const s = useStore.getState();
@@ -86,10 +96,14 @@ export function addLight(type: string, at?: THREE.Vector3) {
     // compare dentro la vista, nel terzo superiore centrale, già puntata sul soggetto
     const r = e.renderer.domElement.getBoundingClientRect();
     const d = camPos.distanceTo(subject);
-    const ray = e.rayPlane(r.left + r.width * (0.5 + side * 0.12), r.top + r.height * 0.28, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(0.9, Math.min(d - 0.8, d * 0.55)))));
+    const ray = e.rayPlane(r.left + r.width * (0.5 + side * 0.12), r.top + r.height * 0.4, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(0.9, Math.min(d - 0.8, d * 0.55)))));
     if (ray) pos = ray;
   }
-  clampToRoom(pos, 0.3);
+  // nasce dentro la stanza, all'altezza di uno stativo, mai attaccata al soffitto
+  const inside = (() => { const { min, max } = room(); return camPos.x > min[0] && camPos.x < max[0] && camPos.z > min[2] && camPos.z < max[2]; })();
+  if (inside || !at) clampToRoom(pos, 0.4);
+  const top = room().max[1];
+  pos.y = Math.max(fx.kind === 'point' ? 1.0 : 1.2, Math.min(pos.y, top - 0.6, 2.3));
   const num = s.lights.filter((l) => familyType(l.fixtureId) === type && l.origin !== 'finestra').length + 1;
   const L = makeLight(fixtureId, pos.toArray() as any, subject.toArray() as any, { name: `${type} ${num}` });
   if (fx.kind === 'point') L.kelvin = 3200;

@@ -140,7 +140,7 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
         <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
         <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e && hasPhoto) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>{hasPhoto ? "Torna all'inquadratura della foto" : 'Torna alla vista iniziale'}</button>
       </div>
-      <div className="hint">Muoviti nella stanza: trascina per guardare, rotella per avanzare, W A S D per camminare, Q E per scendere e salire, tasto destro per spostarti di lato.</div>
+      <div className="hint">Muoviti nella stanza: trascina per guardare, rotella o pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), W A S D per camminare, Q E per scendere e salire, tasto destro o due dita per spostarti di lato.</div>
     </Pop>
   );
 }

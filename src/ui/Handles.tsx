@@ -6,7 +6,7 @@ import { useStore } from '../store';
 import { eng } from '../engineRef';
 import { lightColor, fixtureById } from '../engine/photometry';
 import { HANDLES, aimJoint, POSES } from '../engine/mannequin';
-import { clampToRoom } from '../actions';
+import { clampToRoom, clampFree } from '../actions';
 import { moveFurniture } from '../build';
 import { stopsLabel } from '../export/exports';
 import { sunSky } from '../engine/sun';
@@ -169,11 +169,24 @@ function LightHandle({ id, reg, color, on, sel, label, appear, win }: { id: stri
       const en = eng();
       if (!L || !en || L.origin === 'finestra') return;
       let p: THREE.Vector3 | null;
-      if (e.altKey) {
+      // guardando quasi di taglio il piano orizzontale è instabile: si passa al piano verticale
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(en.camera.quaternion);
+      if (s.level === undefined) s.level = !L.attached && Math.abs(fwd.y) < 0.2 && Math.abs(L.position[1] - en.camera.position.y) < 0.6;
+      const vertical = e.altKey || s.level;
+      if (vertical && e.altKey) {
         const pr = en.project(L.position);
         const dy = (s.ly - e.clientY) * (pr.dist * 2 * Math.tan(THREE.MathUtils.degToRad(en.camera.fov) / 2)) / en.container.clientHeight;
         s.ly = e.clientY;
         p = new THREE.Vector3(L.position[0], L.position[1] + dy, L.position[2]);
+      } else if (vertical) {
+        // a livello degli occhi: destra/sinistra di lato, su/giù in profondità
+        const pr = en.project(L.position);
+        const mpp = (Math.max(0.5, pr.dist) * 2 * Math.tan(THREE.MathUtils.degToRad(en.camera.fov) / 2)) / en.container.clientHeight;
+        const dx = e.clientX - (s.lx ?? e.clientX), dy = e.clientY - s.ly;
+        s.lx = e.clientX; s.ly = e.clientY;
+        const fw = fwd.clone().setY(0).normalize();
+        const rt = new THREE.Vector3(-fw.z, 0, fw.x);
+        p = new THREE.Vector3(...L.position).addScaledVector(rt, dx * mpp).addScaledVector(fw, -dy * mpp * 4);
       } else {
         p = en.rayPlane(e.clientX, e.clientY, new THREE.Plane(new THREE.Vector3(0, 1, 0), -L.position[1]));
         if (!p || p.distanceTo(en.camera.position) > 40) return;
@@ -185,9 +198,9 @@ function LightHandle({ id, reg, color, on, sel, label, appear, win }: { id: stri
         moveFurniture(f.id, { position: [f.position[0] + p.x - L.position[0], f.position[1], f.position[2] + p.z - L.position[2]] });
         return;
       }
-      clampToRoom(p, 0.1);
+      clampFree(p);
       st().updateLight(id, { position: p.toArray() as any });
-    }, (e, s) => { st().snapshot(); s.ly = e.clientY; }, (_e, s) => { if (!s.moved) select(); }));
+    }, (e, s) => { st().snapshot(); s.ly = e.clientY; s.lx = e.clientX; }, (_e, s) => { if (!s.moved) select(); }));
     // anello: intensità in stop
     offs.push(drag(ring, (e, s) => {
       const v = Math.max(-8, Math.min(3, s.s0 + (s.y - e.clientY) / 40));
@@ -196,6 +209,8 @@ function LightHandle({ id, reg, color, on, sel, label, appear, win }: { id: stri
     // rotella: Kelvin
     const wheel = (e: WheelEvent) => {
       e.preventDefault(); e.stopPropagation();
+      // la rotella resta lo zoom della scena; con Alt cambia i Kelvin
+      if (!e.altKey) { eng()?.wheelZoom(e); return; }
       const L = st().lights.find((l) => l.id === id);
       if (!L || L.origin === 'finestra') return;
       const fx = fixtureById(L.fixtureId);
@@ -268,7 +283,7 @@ function PropHandle({ id, reg, sel, label }: { id: string; reg: (el: HTMLElement
         p = en.rayPlane(e.clientX, e.clientY, new THREE.Plane(new THREE.Vector3(0, 1, 0), -O.position[1]));
         if (!p || p.distanceTo(en.camera.position) > 30) return;
       }
-      clampToRoom(p, 0.1);
+      clampFree(p);
       st().updateProp(id, { position: p.toArray() as any });
     }, (e, s) => { st().snapshot(); s.ly = e.clientY; }, (_e, s) => { if (!s.moved) useStore.setState({ selection: { type: 'prop', id } }); });
     const wheel = (e: WheelEvent) => {

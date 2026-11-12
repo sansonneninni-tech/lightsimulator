@@ -40,8 +40,9 @@ export function LightCard({ id }: { id: string }) {
   const fx = fixtureById(L.fixtureId);
   const win = L.origin === 'finestra';
   const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
-  const lux = luxAtTarget(L, skyLux);
-  const fs = fStopForLux(lux, cam.shutter, cam.iso);
+  // lettura vera sulla superficie dove punta la luce: tutte le luci, l'angolo e le ombre
+  const rd = !win && L.on ? eng()?.aimReading(L) : null;
+  const over = rd ? rd.stops : 0;
   const up = (p: any) => st().updateLight(id, p);
   const snap = () => st().snapshot();
   const type = familyType(L.fixtureId);
@@ -51,9 +52,9 @@ export function LightCard({ id }: { id: string }) {
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
       <h3><span>{L.name}</span><div className={`toggle ${L.on ? 'on' : ''}`} title="Accesa" onClick={() => { snap(); up({ on: !L.on }); }} /></h3>
       <div className="row">
-        <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)} · ${Math.round(lux)} lux`}</b></div>
+        <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)}${L.stops > 0.01 ? ' oltre il pieno' : L.stops < -0.01 ? ` · ${Math.max(1, Math.round(Math.pow(2, L.stops) * 100))}%` : ' · pieno'}`}</b></div>
         <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => up({ stops: +e.target.value })} />
-        {!win && L.on && <div className="hint num" style={{ marginTop: 8 }}>Sul soggetto: f/{fmtStop(fs)} a ISO {cam.iso}, {fmtShutter(cam.shutter)} · {fs > cam.fStop ? `${(Math.log2(fs / cam.fStop) * 2).toFixed(1)} stop sopra` : `${(Math.log2(cam.fStop / Math.max(fs, 0.01)) * 2).toFixed(1)} stop sotto`} il diaframma</div>}
+        {rd && <div className="hint num" style={{ marginTop: 8 }}>Dove punta: {Math.round(rd.lux).toLocaleString('it-IT')} lux, {Math.abs(over) < 0.05 ? 'esposto giusto' : `${Math.abs(over).toFixed(1)} stop ${over > 0 ? 'sopra' : 'sotto'}`} a f/{fmtStop(cam.fStop)}, ISO {cam.iso}{over > 2.5 ? ' · lì è bruciato' : over < -3 ? ' · lì è quasi nero' : ''}</div>}
       </div>
       {!win && (
         <div className="row">
@@ -64,6 +65,12 @@ export function LightCard({ id }: { id: string }) {
               <button key={g} className={`chip ${L.gel === g ? 'on' : ''}`} onClick={() => { snap(); up({ gel: g }); }}>{GELS.find((x) => x.id === g)!.name}</button>
             ))}
           </div>
+        </div>
+      )}
+      {!win && !L.attached && (
+        <div className="row">
+          <div className="k"><span>Altezza</span><b className="num">{L.position[1].toFixed(2)} m</b></div>
+          <input type="range" min={0.1} max={Math.max(4, (useStore.getState().room?.height || 2.8) + 4)} step={0.05} value={L.position[1]} onPointerDown={snap} onChange={(e) => up({ position: [L.position[0], +e.target.value, L.position[2]] })} />
         </div>
       )}
       {!win && (
@@ -124,8 +131,8 @@ export function LightCard({ id }: { id: string }) {
               </div>
             </div>
           )}
-          <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>
-          <div className="hint">Trascina il punto per spostarla (Alt per l'altezza), il mirino per puntarla, l'anello in verticale per l'intensità. Rotella: Kelvin.</div>
+          {(win || L.attached) && <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>}
+          <div className="hint">Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin.</div>
           {!win && <><div className="hr" /><button className="more danger" onClick={removeSelection}>{L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'}</button></>}
         </div>
       )}

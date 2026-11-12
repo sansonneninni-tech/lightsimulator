@@ -341,6 +341,7 @@ export function buildRoom(r: RoomSpec) {
   const floor = slab(W + 2 * T, 0.4, D + 2 * T, at(0, -0.2, 0), fm, 'pavimento');
   floor.castShadow = false;
   const ceil = slab(W + 2 * T, 0.4, D + 2 * T, at(0, H + 0.2, 0), cm, 'soffitto');
+  ceil.userData.cut = 'soffitto';
   g.add(floor, ceil);
   surfaces.push(floor, ceil);
   const dark = ['notte', 'nero', 'mattoni', 'terracotta'].includes(r.wall);
@@ -357,6 +358,7 @@ export function buildRoom(r: RoomSpec) {
       const c = f.origin.clone().addScaledVector(f.right, (u0 + u1) / 2).setY((v0 + v1) / 2).addScaledVector(f.normal, -T / 2);
       const basis = new THREE.Matrix4().makeBasis(f.right, up, f.normal).setPosition(c);
       const m = slab(u1 - u0, v1 - v0, T, basis, wm, 'parete');
+      m.userData.cut = wall;
       g.add(m); surfaces.push(m);
     };
     const ops = r.openings.filter((o) => o.wall === wall).sort((a, b) => a.offset - b.offset);
@@ -370,7 +372,7 @@ export function buildRoom(r: RoomSpec) {
       cur = b;
       // telaio
       const { group: og, pick } = buildOpening(o, f, dark);
-      og.traverse((x) => { x.userData.openingId = o.id; });
+      og.traverse((x) => { x.userData.openingId = o.id; x.userData.cut = wall; });
       g.add(og);
       og.traverse((x: any) => { if (x.isMesh) surfaces.push(x); });
       pick.userData.openingId = o.id;
@@ -391,6 +393,7 @@ export function buildRoom(r: RoomSpec) {
       const basis = new THREE.Matrix4().makeBasis(f.right, new THREE.Vector3(0, 1, 0), f.normal).setPosition(c);
       const m = slab(u1 - u0, 0.08, 0.012, basis, bm, 'battiscopa');
       m.castShadow = false;
+      m.userData.cut = wall;
       g.add(m);
     };
     for (const o of ops) { seg(cur, o.offset - o.width / 2 - 0.06); cur = o.offset + o.width / 2 + 0.06; }

@@ -12,7 +12,7 @@ import {
 import { PersonState, buildMannequin, applyPose } from './mannequin';
 import { SunState, sunDirection, sunSky } from './sun';
 import type { PropState, CamState, SceneSnapshot } from '../store';
-import { RoomSpec, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
+import { RoomSpec, WallId, wallFrame, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
 import { FurnitureState, buildFurniture } from './furniture';
 import { denoise } from './denoise';
 
@@ -1110,9 +1110,42 @@ export class Engine {
     if (!this.recon && !this.built) return;
     const { min, max } = this.bounds;
     const p = this.camera.position;
+    if (this.built) {
+      // stanza costruita: si può uscire dalla stanza (le pareti davanti alla camera spariscono)
+      const m = 9;
+      p.x = Math.min(max[0] + m, Math.max(min[0] - m, p.x));
+      p.y = Math.min(max[1] + m, Math.max(0.15, p.y));
+      p.z = Math.min(max[2] + m, Math.max(min[2] - m, p.z));
+      return;
+    }
     p.x = Math.min(max[0] - 0.15, Math.max(min[0] + 0.15, p.x));
     p.y = Math.min(max[1] - 0.1, Math.max(0.15, p.y));
     p.z = Math.min(max[2] - 0.15, Math.max(min[2] + 0.15, p.z));
+  }
+
+  // pareti "volanti": guardando da fuori, le pareti (e il soffitto) tra la camera e la stanza
+  // non si vedono e non si toccano, ma continuano a fare ombra
+  cutaway = new Set<string>();
+  updateCutaway(on: boolean) {
+    if (!this.built) return;
+    const r = this.built;
+    const p = this.camera.position;
+    const cut = new Set<string>();
+    if (on) {
+      for (const w of ['fondo', 'davanti', 'sinistra', 'destra'] as WallId[]) {
+        const f = wallFrame(r, w);
+        if (p.clone().sub(f.origin).dot(f.normal) < 0.02) cut.add(w);
+      }
+      if (p.y > r.height - 0.02) cut.add('soffitto');
+    }
+    if (cut.size === this.cutaway.size && [...cut].every((c) => this.cutaway.has(c))) return;
+    this.cutaway = cut;
+    this.room.traverse((o) => {
+      const c = o.userData.cut;
+      if (!c) return;
+      if (cut.has(c)) o.layers.set(1); else o.layers.set(0);
+    });
+    this.scene.traverse((o: any) => { if (o.isLight && o.shadow) o.shadow.camera.layers.enable(1); });
   }
 
   isHome() {
@@ -1120,17 +1153,67 @@ export class Engine {
     return this.camera.position.distanceTo(this.homePose.pos) < 0.02 && this.camera.quaternion.angleTo(this.homePose.quat) < 0.01;
   }
 
+  // avanti/indietro lungo la direzione del puntatore
+  dolly(amount: number, clientX?: number, clientY?: number) {
+    let dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    if (clientX !== undefined && clientY !== undefined) {
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(this.ndc(clientX, clientY), this.camera);
+      dir = rc.ray.direction.clone();
+    }
+    this.camera.position.addScaledVector(dir, Math.max(-1.2, Math.min(1.2, amount)));
+    this.applyLook();
+    this.dirty = true;
+  }
+
+  // rotella del mouse o pizzico sul trackpad (arriva come rotella con Ctrl)
+  wheelZoom(e: WheelEvent) {
+    if (!this.navEnabled) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const k = e.ctrlKey ? 0.02 : 0.004;
+    this.dolly(-e.deltaY * unit * k, e.clientX, e.clientY);
+  }
+
   bindNav() {
     const el = this.renderer.domElement;
     let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; grab?: Grab | null } | null = null;
+    // dita sullo schermo: due dita = pizzico per avanzare/arretrare e trascinamento per spostarsi
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { d: number; x: number; y: number } | null = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()];
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    };
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerdown', (e) => {
       if (!this.navEnabled) return;
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          if (drag?.grab && drag.moved) drag.grab.end?.();
+          drag = null;
+          pinch = pinchState();
+          el.setPointerCapture(e.pointerId);
+          return;
+        }
+        if (touches.size > 2) return;
+      }
       const grab = e.button === 0 ? this.onGrab?.(e) : null;
       drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, grab };
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && touches.size >= 2 && this.navEnabled) {
+          const n = pinchState();
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+          this.camera.position.addScaledVector(right, -(n.x - pinch.x) * 0.006).addScaledVector(new THREE.Vector3(0, 1, 0), (n.y - pinch.y) * 0.006);
+          this.dolly((n.d - pinch.d) * 0.009, n.x, n.y);
+          pinch = n;
+          return;
+        }
+      }
       if (!drag || !this.navEnabled) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 3) return;
@@ -1155,6 +1238,10 @@ export class Engine {
       this.dirty = true;
     });
     const end = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') {
+        touches.delete(e.pointerId);
+        if (touches.size < 2) pinch = null;
+      }
       if (drag && !drag.moved) this.onClick?.(e);
       if (drag?.grab && drag.moved) drag.grab.end?.();
       drag = null;
@@ -1165,14 +1252,11 @@ export class Engine {
       el.style.cursor = g ? 'grab' : '';
     });
     el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', () => (drag = null));
+    el.addEventListener('pointercancel', (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; drag = null; });
     el.addEventListener('wheel', (e) => {
       if (!this.navEnabled) return;
       e.preventDefault();
-      const f = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      this.camera.position.addScaledVector(f, -e.deltaY * 0.004);
-      this.applyLook();
-      this.dirty = true;
+      this.wheelZoom(e);
     }, { passive: false });
     el.addEventListener('dblclick', (e) => this.onDoubleClick?.(e));
     window.addEventListener('keydown', (e) => {
@@ -1240,6 +1324,31 @@ export class Engine {
   measure(clientX: number, clientY: number) {
     const hit = this.raycast(clientX, clientY);
     if (!hit || !this.snapshot) return null;
+    return this.readingAt(hit.point, hit.normal);
+  }
+
+  // lettura dell'esposimetro sulla superficie dove punta una luce (tutte le luci, con le ombre)
+  aimReading(L: { position: [number, number, number]; target: [number, number, number]; attached?: string }) {
+    if (!this.snapshot) return null;
+    const from = new THREE.Vector3(...L.position), to = new THREE.Vector3(...L.target);
+    const dir = to.clone().sub(from);
+    const len = dir.length();
+    if (len < 1e-3) return null;
+    dir.normalize();
+    const rc = new THREE.Raycaster(from.clone().addScaledVector(dir, 0.08), dir, 0, len + 6);
+    (rc as any).firstHitOnly = true;
+    const own = L.attached ? this.furn.get(L.attached)?.obj : null;
+    const occ = [...this.surfaces, ...this.furnitureObjects().filter((o) => o !== own), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
+    const hit = rc.intersectObjects(occ, true).sort((a, b) => a.distance - b.distance)[0];
+    if (!hit || !hit.face) return this.readingAt(to, dir.clone().negate());
+    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    if (n.dot(dir) > 0) n.negate();
+    return this.readingAt(hit.point, n);
+  }
+
+  readingAt(point: THREE.Vector3, normal: THREE.Vector3) {
+    if (!this.snapshot) return null;
+    const hit = { point, normal };
     const s = this.snapshot;
     const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
     const p = hit.point.clone().addScaledVector(hit.normal, 0.01);
@@ -1301,6 +1410,7 @@ export class Engine {
     // ciò che le altre foto vedono: si mostrano solo vicino al punto di vista della prima
     if (this.fillMesh && this.recon?.extras.length && this.homePose) this.fillMesh.visible = this.camera.position.distanceTo(this.homePose.pos) < 0.35;
     this.camera.updateMatrixWorld();
+    this.updateCutaway(true);
     this.renderer.setRenderTarget(this.rt);
     this.renderer.render(this.scene, this.camera);
     this.updateRelight();
@@ -1489,6 +1599,10 @@ export class Engine {
     // le lampadine stanno dentro la loro luce: nel path tracing la nasconderebbero
     const hidden: THREE.Object3D[] = [];
     for (const o of this.furn.values()) o.obj.traverse((m: any) => { if (m.userData.bulb && m.visible) { m.visible = false; hidden.push(m); } });
+    // fotografando da fuori, le pareti tra camera e stanza si tolgono (come le pareti mobili sul set)
+    this.camera.updateMatrixWorld();
+    this.updateCutaway(true);
+    this.room.traverse((m: any) => { if (m.isMesh && m.userData.cut && this.cutaway.has(m.userData.cut) && m.visible) { m.visible = false; hidden.push(m); } });
     const selVis = this.selBox.visible;
     this.selBox.visible = false;
     const prevBg = this.scene.background;

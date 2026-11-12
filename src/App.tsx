@@ -7,7 +7,7 @@ import { SelectionCard } from './ui/Cards';
 import { LightsPanel, PeoplePanel, CameraPanel, SkyPanel, PlaceMenu, PanelId } from './ui/Panels';
 import { Roll, Viewer } from './ui/Viewer';
 import { loadPhotos, saveProject, openProject, loadSample, snapshotOf } from './project';
-import { addLightAtScreen, addLight, removeSelection } from './actions';
+import { addLightAtScreen, addLight, removeSelection, clampToRoom } from './actions';
 import { Start, RoomPanel, FurnitureCard, OpeningCard } from './ui/Room';
 import { moveFurniture, updateOpening, autoExpose } from './build';
 import { wallFrame } from './engine/room';
@@ -54,15 +54,20 @@ export default function App() {
       while (o) { if (o.userData?.[key]) return o.userData[key]; o = o.parent; }
       return null;
     };
-    // trascinare l'arredo o l'apertura già scelti (altrimenti il trascinamento gira lo sguardo)
+    // mobili e persone si trascinano direttamente; le aperture dopo averle scelte
+    // (trascinando sul resto si gira lo sguardo)
     const grabTarget = (ev: PointerEvent) => {
       const s = useStore.getState();
-      if (s.phase !== 'ready' || s.meter || !s.room || !s.selection) return null;
-      const sel = s.selection;
-      if (sel.type !== 'furniture' && sel.type !== 'opening') return null;
+      if (s.phase !== 'ready' || s.meter || s.manikin) return null;
       const hit = e.raycast(ev.clientX, ev.clientY);
       if (!hit) return null;
-      const id = idOf(hit.object, sel.type === 'furniture' ? 'furnitureId' : 'openingId');
+      const fid = s.room ? idOf(hit.object, 'furnitureId') : null;
+      if (fid) return { sel: { type: 'furniture' as const, id: fid }, hit };
+      const pid = idOf(hit.object, 'personId');
+      if (pid) return { sel: { type: 'person' as const, id: pid }, hit };
+      const sel = s.selection;
+      if (!s.room || sel?.type !== 'opening') return null;
+      const id = idOf(hit.object, 'openingId');
       return id === sel.id ? { sel, hit } : null;
     };
     e.onHover = (ev) => !!grabTarget(ev);
@@ -70,16 +75,31 @@ export default function App() {
       const g = grabTarget(ev);
       if (!g) return null;
       const s = useStore.getState();
+      const pick = () => { const st = useStore.getState(); st.snapshot(); if (st.selection?.id !== g.sel.id) useStore.setState({ selection: g.sel, manikin: null }); };
       if (g.sel.type === 'furniture') {
         const f = s.furniture.find((x) => x.id === g.sel.id)!;
         const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -g.hit.point.y);
         const ox = f.position[0] - g.hit.point.x, oz = f.position[2] - g.hit.point.z;
         return {
-          start: () => useStore.getState().snapshot(),
+          start: pick,
           move: (m) => {
             const p = e.rayPlane(m.clientX, m.clientY, plane);
             if (!p || p.distanceTo(e.camera.position) > 40) return;
             moveFurniture(f.id, { position: [p.x + ox, f.position[1], p.z + oz] });
+          },
+        };
+      }
+      if (g.sel.type === 'person') {
+        const P = s.people.find((x) => x.id === g.sel.id)!;
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -g.hit.point.y);
+        const ox = P.position[0] - g.hit.point.x, oz = P.position[2] - g.hit.point.z;
+        return {
+          start: pick,
+          move: (m) => {
+            const p = e.rayPlane(m.clientX, m.clientY, plane);
+            if (!p || p.distanceTo(e.camera.position) > 40) return;
+            const q = clampToRoom(new THREE.Vector3(p.x + ox, 0, p.z + oz), 0.3);
+            useStore.getState().updatePerson(P.id, { position: [q.x, P.position[1], q.z] });
           },
         };
       }
@@ -296,7 +316,7 @@ export default function App() {
           {cam.falseColor ? (
             <div id="legend" className="glass chrome">{FC_LEGEND.map(([c, n]) => <span key={n}><i style={{ background: c }} />{n}</span>)}</div>
           ) : help && (
-            <div id="help" className="chrome">Trascina per guardarti intorno · rotella o W A S D per muoverti<br />Tocca un mobile e trascinalo · trascina un punto luminoso per spostare la luce<br />Doppio clic: nuova luce · Cmd+Z: annulla · F: vista iniziale</div>
+            <div id="help" className="chrome">Trascina per guardarti intorno · rotella o pizzico per avvicinarti e allontanarti (anche fuori dalla stanza)<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · F: vista iniziale</div>
           )}
           <Roll />
           <SelectionCard />
