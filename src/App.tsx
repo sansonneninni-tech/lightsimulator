@@ -35,6 +35,7 @@ export default function App() {
   const [idle, setIdle] = useState(false);
   const [toastOn, setToastOn] = useState(false);
   const [forming, setForming] = useState(false);
+  const [help, setHelp] = useState(() => !localStorage.getItem('ls-help'));
 
   // motore
   useEffect(() => {
@@ -75,6 +76,13 @@ export default function App() {
   useEffect(() => {
     if (phase === 'ready') { setForming(true); const t = setTimeout(() => setForming(false), 80); return () => clearTimeout(t); }
   }, [phase]);
+
+  // aiuto: solo alla prima scena, poi si ritira (resta nelle schede e nel pannello Camera)
+  useEffect(() => {
+    if (phase !== 'ready' || !help) return;
+    const t = setTimeout(() => { setHelp(false); localStorage.setItem('ls-help', '1'); }, 20000);
+    return () => clearTimeout(t);
+  }, [phase, help]);
 
   // toast
   useEffect(() => {
@@ -225,7 +233,7 @@ export default function App() {
           </div>
           {cam.falseColor ? (
             <div id="legend" className="glass chrome">{FC_LEGEND.map(([c, n]) => <span key={n}><i style={{ background: c }} />{n}</span>)}</div>
-          ) : (
+          ) : help && (
             <div id="help" className="chrome">Trascina per guardarti intorno · rotella o W A S D per muoverti<br />Trascina un punto per spostare la luce · l'anello in verticale per l'intensità<br />Spazio: foto originale · Doppio clic: nuova luce · Cmd+Z: annulla</div>
           )}
           <Roll />
