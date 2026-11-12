@@ -14,6 +14,7 @@ import { stopsLabel, luxAtTarget } from '../export/exports';
 import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
 import { FurnitureCard, OpeningCard } from './Room';
+import { updateOpening } from '../build';
 
 const MAIN_GELS = ['none', 'cto-quarter', 'cto-half', 'cto-full', 'ctb-half', 'ctb-full', 'plus-green', 'minus-green'];
 
@@ -50,10 +51,20 @@ export function LightCard({ id }: { id: string }) {
   const [kMin, kMax] = fx.kelvinRange || [1800, 10000];
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{L.name}</span><div className={`toggle ${L.on ? 'on' : ''}`} title="Accesa" onClick={() => { snap(); up({ on: !L.on }); }} /></h3>
+      <h3><span>{L.name}</span><div className={`toggle ${L.on ? 'on' : ''}`} title={win && L.windowId && st().room ? 'Aperta (spegni per chiudere l\'oscurante)' : 'Accesa'} onClick={() => {
+        // finestra di una stanza costruita: spegnere vuol dire chiudere l'oscurante (vale anche nello scatto)
+        if (win && L.windowId && st().room) { updateOpening(L.windowId, { closed: true }, true); useStore.setState({ selection: null }); st().showToast('Oscurante chiuso: da questa finestra non entra più luce. Toccala per riaprirla.'); return; }
+        snap(); up({ on: !L.on });
+      }} /></h3>
       <div className="row">
         <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)}${L.stops > 0.01 ? ' oltre il pieno' : L.stops < -0.01 ? ` · ${Math.max(1, Math.round(Math.pow(2, L.stops) * 100))}%` : ' · pieno'}`}</b></div>
-        <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => up({ stops: +e.target.value })} />
+        <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => {
+          const v = +e.target.value;
+          // le finestre di una stanza costruita condividono il filtro (sole e cielo sono uno solo)
+          if (win && st().room) useStore.setState({ lights: st().lights.map((x) => (x.origin === 'finestra' ? { ...x, stops: v } : x)) });
+          else up({ stops: v });
+        }} />
+        {win && st().room && <div className="hint" style={{ marginTop: 8 }}>Vale per tutte le finestre, come un filtro ND sui vetri: abbassa sole e cielo insieme, anche nello scatto. L'interruttore chiude l'oscurante.</div>}
         {rd && <div className="hint num" style={{ marginTop: 8 }}>Dove punta: {Math.round(rd.lux).toLocaleString('it-IT')} lux, {Math.abs(over) < 0.05 ? 'esposto giusto' : `${Math.abs(over).toFixed(1)} stop ${over > 0 ? 'sopra' : 'sotto'}`} a f/{fmtStop(cam.fStop)}, ISO {cam.iso}{over > 2.5 ? ' · lì è bruciato' : over < -3 ? ' · lì è quasi nero' : ''}</div>}
       </div>
       {!win && (

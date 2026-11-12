@@ -198,7 +198,8 @@ export function OpeningCard({ id }: { id: string }) {
   const name = OPENING_KINDS.find((k) => k.id === o.kind)?.name || '';
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{name}</span></h3>
+      <h3><span>{name}{o.kind !== 'porta' && o.closed ? ' · oscurata' : ''}</span>{o.kind !== 'porta' && <div className={`toggle ${o.closed ? '' : 'on'}`} title={o.closed ? 'Apri' : 'Chiudi l\'oscurante'} onClick={() => up({ closed: !o.closed }, true)} />}</h3>
+      {o.kind !== 'porta' && <div className="hint" style={{ marginBottom: 12 }}>{o.closed ? 'Oscurante chiuso: da qui non entra luce. Con tutte le finestre chiuse la stanza è al buio.' : 'Aperta: entrano sole e cielo. L\'interruttore chiude l\'oscurante.'}</div>}
       <div className="row">
         <div className="types four" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
           {OPENING_KINDS.map((k) => <button key={k.id} className={`type ${o.kind === k.id ? 'on' : ''}`} onClick={() => up({ kind: k.id, width: k.width, height: k.height, sill: k.sill }, true)}><Svg d={OPENING_ICONS[k.id]} />{k.name}</button>)}

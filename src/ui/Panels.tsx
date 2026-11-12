@@ -11,7 +11,7 @@ import { WEATHER, fmtHour, sunAngles, sunSky } from '../engine/sun';
 import { LIGHT_TYPES, addLight, addPerson, addProp } from '../actions';
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
-import { autoExpose } from '../build';
+import { autoExpose, updateRoom } from '../build';
 
 const FOCUS_VALUES = [0, 0.5, 0.7, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 1000];
 const fmtFocus = (v: number) => (!v ? 'fuoco auto' : v >= 1000 ? 'fuoco ∞' : `fuoco ${v.toLocaleString('it-IT')} m`);
@@ -194,8 +194,16 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
         <circle id="sundot" cx={cx} cy={cy} r="9" fill={night ? '#9fb3ff' : '#ffd27a'} style={{ cursor: 'grab', filter: `drop-shadow(0 0 8px ${night ? '#6f86ff' : '#ffb13b'})` }} />
       </svg>
       <div className="num" style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--t2)', fontSize: 11, margin: '8px 0 14px' }}>
-        <span>Alba {fmtHour(rise)}</span><b style={{ color: 'var(--t1)', fontWeight: 500 }}>{fmtHour(sun.hour)}</b><span>Tramonto {fmtHour(setH)}</span>
+        <span>Alba {fmtHour(rise)}</span><b style={{ color: 'var(--t1)', fontWeight: 500 }}>{fmtHour(sun.hour)}{night ? ' · notte' : ''}</b><span>Tramonto {fmtHour(setH)}</span>
       </div>
+      <div className="row">
+        <div className="chips">
+          {([['Mattina', rise + 1.5], ['Mezzogiorno', (rise + setH) / 2], ['Tramonto', setH - 0.4], ['Ora blu', setH + 0.45], ['Notte', Math.min(23.5, setH + 3)]] as [string, number][]).map(([n, h]) => (
+            <button key={n} className={`chip ${Math.abs(sun.hour - h) < 0.2 ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ hour: Math.round(h * 12) / 12, enabled: true }); }}>{n}</button>
+          ))}
+        </div>
+      </div>
+      {built && hasWindows && <ShutterRow />}
       <div className="row">
         <div className="chips">{WEATHER.map((w) => <button key={w.id} className={`chip ${sun.weather === w.id ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ weather: w.id }); }}>{w.name}</button>)}</div>
       </div>
@@ -209,6 +217,19 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
         <div className="hint">Ruota l'orientamento della stanza rispetto al nord.</div>
       </div>
     </Pop>
+  );
+}
+
+// oscuranti di tutte le finestre insieme: il buio con un tocco
+function ShutterRow() {
+  const room = useStore((s) => s.room);
+  if (!room) return null;
+  const wins = room.openings.filter((o) => o.kind !== 'porta');
+  const allClosed = wins.every((o) => o.closed);
+  return (
+    <div className="row">
+      <button className="btn" onClick={() => { updateRoom({ openings: room.openings.map((o) => (o.kind === 'porta' ? o : { ...o, closed: !allClosed })) }, true); useStore.getState().showToast(allClosed ? 'Finestre aperte.' : 'Oscuranti chiusi: la stanza è al buio, accendi le tue luci.'); }}>{allClosed ? 'Apri tutte le finestre' : 'Chiudi tutti gli oscuranti (buio)'}</button>
+    </div>
   );
 }
 

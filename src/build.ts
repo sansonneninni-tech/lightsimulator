@@ -99,7 +99,7 @@ export const TEMPLATES: Template[] = [
 // una luce "finestra" per ogni finestra (cielo), una lampadina per ogni lampada
 export function syncRoomLights(room: RoomSpec, furniture: FurnitureState[], lights: LightState[]): LightState[] {
   const out: LightState[] = [];
-  const wins = windowInfos(room);
+  const wins = windowInfos(room, true);
   for (const L of lights) {
     if (L.origin === 'finestra') {
       const w = wins.find((x) => x.id === L.windowId);
@@ -229,7 +229,8 @@ export function updateRoom(patch: Partial<RoomSpec>, snapshot = true) {
     if (L.origin === 'finestra' || L.attached) return L;
     const b = roomBounds(room);
     const p = L.position;
-    return { ...L, position: [Math.min(b.max[0] - 0.1, Math.max(b.min[0] + 0.1, p[0])), Math.min(b.max[1] - 0.1, p[1]), Math.min(b.max[2] - 0.1, Math.max(b.min[2] + 0.1, p[2]))] as [number, number, number] };
+    // le luci restano libere (anche fuori dalla stanza), entro 9 m
+    return { ...L, position: [Math.min(b.max[0] + 9, Math.max(b.min[0] - 9, p[0])), Math.min(b.max[1] + 6, p[1]), Math.min(b.max[2] + 9, Math.max(b.min[2] - 9, p[2]))] as [number, number, number] };
   });
   const b = roomBounds(room);
   const people = s.people.map((P) => ({ ...P, position: [Math.min(b.max[0] - 0.3, Math.max(b.min[0] + 0.3, P.position[0])), 0, Math.min(b.max[2] - 0.3, Math.max(b.min[2] + 0.3, P.position[2]))] as [number, number, number] }));

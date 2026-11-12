@@ -6,7 +6,7 @@ import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { Reconstruction } from './reconstruct';
 import {
-  LightState, fixtureById, effectiveLumens, lightColor, spotAngles, spotCandela, illuminanceAt,
+  LightState, fixtureById, effectiveLumens, diffusionById, lightColor, spotAngles, spotCandela, illuminanceAt,
   ev100, exposureFromEV100, ISO_VALUES, FSTOPS, SENSORS, ASPECTS, fStopForLux,
 } from './photometry';
 import { PersonState, buildMannequin, applyPose } from './mannequin';
@@ -512,7 +512,7 @@ export class Engine {
   }
 
   windowList(): WindowInfoLite[] {
-    if (this.built) return windowInfos(this.built);
+    if (this.built) return windowInfos(this.built, true);
     return this.recon?.windows || [];
   }
 
@@ -734,10 +734,11 @@ export class Engine {
     const prev = this.snapshot;
     this.snapshot = s;
     if (!prev || prev.cam !== s.cam) { this.updateLens(); this.updateExposure(); }
-    if (!prev || prev.lights !== s.lights || prev.sun !== s.sun) this.syncLights(s.lights, s.sun);
-    if (!prev || prev.sun !== s.sun) this.syncSun(s.sun);
+    if (!prev || prev.lights !== s.lights || prev.sun !== s.sun || prev.props !== s.props) this.syncLights(s.lights, s.sun);
+    if (!prev || prev.sun !== s.sun || (this.built && prev.lights !== s.lights && this.windowGain(prev.lights) !== this.windowGain(s.lights))) this.syncSun(s.sun);
     if (!prev || prev.people !== s.people) this.syncPeople(s.people);
     if (!prev || prev.props !== s.props) this.syncProps(s.props);
+    if (!prev || prev.props !== s.props || prev.lights !== s.lights) this.glowFrames(this.resolveLights(s.lights));
     if (s.room && (!prev || prev.room !== s.room || !this.built)) { this.loadRoom(s.room, false); this.updateSelBox(); }
     if (!prev || prev.furniture !== s.furniture || prev.room !== s.room) this.syncFurniture(s.furniture || []);
     if (!prev || prev.lights !== s.lights) this.updateGlow();
@@ -760,7 +761,72 @@ export class Engine {
     return this.snapshot ? (this.snapshot.sun.enabled ? sunSky(this.snapshot.sun).skyLux : 0) : 10000;
   }
 
-  syncLights(lights: LightState[], sun: SunState) {
+  // una luce che punta attraverso un telaio di diffusione diventa una sorgente grande e morbida
+  // grande quanto il telaio (con la parte di flusso che lo colpisce, meno l'assorbimento del telo)
+  diffused(L: LightState, props: PropState[]): LightState | null {
+    if (L.origin === 'finestra' || L.attached) return null;
+    const pos = new THREE.Vector3(...L.position), tgt = new THREE.Vector3(...L.target);
+    const reach = pos.distanceTo(tgt);
+    if (reach < 1e-3) return null;
+    const dir = tgt.clone().sub(pos).normalize();
+    const fx = fixtureById(L.fixtureId);
+    let best: { t: number; L: LightState } | null = null;
+    for (const p of props) {
+      if (p.kind !== 'diffusore') continue;
+      const rot = new THREE.Euler(THREE.MathUtils.degToRad(p.tilt), THREE.MathUtils.degToRad(p.rotationY), 0, 'YXZ');
+      const n = new THREE.Vector3(0, 0, 1).applyEuler(rot), right = new THREE.Vector3(1, 0, 0).applyEuler(rot), up = new THREE.Vector3(0, 1, 0).applyEuler(rot);
+      const c = new THREE.Vector3(...p.position);
+      const den = dir.dot(n);
+      if (Math.abs(den) < 0.05) continue;
+      const t = c.clone().sub(pos).dot(n) / den;
+      if (t < 0.05 || t > reach + 1) continue;
+      const h = pos.clone().addScaledVector(dir, t).sub(c);
+      const [w, hh] = p.size;
+      if (Math.abs(h.dot(right)) > w * 0.65 || Math.abs(h.dot(up)) > hh * 0.65) continue;
+      if (best && best.t < t) continue;
+      const omega = Math.min(2 * Math.PI, (w * hh * Math.abs(den)) / (t * t));
+      let frac: number;
+      if (fx.kind === 'spot') { const { field } = spotAngles(L); frac = omega / (2 * Math.PI * (1 - Math.cos(THREE.MathUtils.degToRad(Math.min(170, field)) / 2))); }
+      else if (fx.kind === 'area') frac = omega / Math.PI;
+      else frac = omega / (4 * Math.PI);
+      const out = den > 0 ? n : n.clone().negate();
+      const ctr = c.clone().addScaledVector(out, 0.03);
+      best = { t, L: {
+        ...L, fixtureId: 'panel-120x60', position: ctr.toArray() as any, target: ctr.clone().addScaledVector(out, 2).toArray() as any,
+        size: [w, hh], softness: 0, diffusion: 'none', virtualLm: effectiveLumens(L, 0) * Math.min(1, frac) * 0.7,
+      } };
+      (best.L as any).frameId = p.id;
+    }
+    return best?.L || null;
+  }
+
+  resolveLights(lights: LightState[]) {
+    const props = this.snapshot?.props || [];
+    if (!props.some((p) => p.kind === 'diffusore')) return lights;
+    return lights.map((L) => this.diffused(L, props) || L);
+  }
+
+  // il telo del telaio si illumina (solo in anteprima: nello scatto la luce è la sorgente stessa)
+  glowFrames(lights: LightState[]) {
+    const lum = new Map<string, number>();
+    for (const L of lights) {
+      const id = (L as any).frameId;
+      if (!id || !L.on) continue;
+      lum.set(id, (lum.get(id) || 0) + effectiveLumens(L, 0) / (Math.PI * L.size[0] * L.size[1]));
+    }
+    for (const [id, o] of this.props) {
+      if (o.state.kind !== 'diffusore') continue;
+      const m = (o.obj.getObjectByName('pannello') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+      const v = lum.get(id) || 0;
+      m.emissive.setRGB(1, 1, 1);
+      m.emissiveIntensity = v;
+      m.userData.glow = v;
+    }
+  }
+
+  syncLights(rawLights: LightState[], sun: SunState) {
+    const lights = this.resolveLights(rawLights);
+    this.glowFrames(lights);
     const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
     const skyK = sunSky(sun).skyK;
     const ids = new Set(lights.map((l) => l.id));
@@ -803,7 +869,7 @@ export class Engine {
       if (wantKind === 'point') {
         r.intensity = lm / (4 * Math.PI);
         r.decay = 2; r.distance = 0;
-        r.shadow.radius = 2 + L.softness * 8;
+        r.shadow.radius = 2 + L.softness * 8 + diffusionById(L.diffusion).spread * 8;
       } else if (wantKind === 'area') {
         // emettitore lambertiano approssimato con uno spot morbido
         r.intensity = lm / Math.PI;
@@ -819,7 +885,7 @@ export class Engine {
         r.angle = THREE.MathUtils.degToRad(Math.min(170, field) / 2);
         r.penumbra = Math.min(1, Math.max(0.05, 1 - beam / field));
         r.decay = 2; r.distance = 0;
-        r.shadow.radius = 1 + L.softness * 6;
+        r.shadow.radius = 1 + L.softness * 6 + diffusionById(L.diffusion).spread * 10;
       }
       // bandiere (alette) per gli spot
       const bd = L.barnDoors;
@@ -838,12 +904,24 @@ export class Engine {
     if (o.doors) this.scene.remove(o.doors);
   }
 
+  // stanza costruita: il cursore della luce dalle finestre fa da filtro ND su tutte le finestre
+  // (sole e cielo insieme, uguale in anteprima e nello scatto)
+  windowGain(lights?: LightState[]) {
+    if (!this.built) return 1;
+    const ws = (lights || this.snapshot?.lights || []).filter((L) => L.origin === 'finestra');
+    if (!ws.length) return 1;
+    const on = ws.filter((L) => L.on);
+    if (!on.length) return 0;
+    return Math.pow(2, Math.max(...on.map((L) => L.stops)));
+  }
+
   syncSun(s: SunState) {
     const { dir, elevation } = sunDirection(s);
     const sk = sunSky(s);
-    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && this.windowList().length > 0;
+    const gain = this.windowGain();
+    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && this.windowList().length > 0 && gain > 0;
     this.sun.visible = on;
-    this.sun.intensity = on ? sk.sunLux : 0;
+    this.sun.intensity = on ? sk.sunLux * gain : 0;
     this.sun.color.copy(lightColor(sk.sunK, 'none'));
     const bb = this.bounds;
     const c = new THREE.Vector3((bb.min[0] + bb.max[0]) / 2, 1.2, (bb.min[2] + bb.max[2]) / 2);
@@ -858,8 +936,8 @@ export class Engine {
     }
     // stanza costruita: cielo e terreno fuori dalle finestre
     if (this.built) {
-      const skyLux = s.enabled ? sk.skyLux : 0.3;
-      const groundLux = (on ? sk.sunLux * Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation))) : 0) + skyLux;
+      const skyLux = (s.enabled ? sk.skyLux : 0.3) * gain;
+      const groundLux = (on ? sk.sunLux * gain * Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation))) : 0) + skyLux;
       const skyCol = lightColor(sk.skyK, 'none');
       this.skyTex = skyTexture(skyLux / Math.PI, skyCol, (0.18 * groundLux) / Math.PI, this.skyTex || undefined);
       this.scene.background = this.skyTex;
@@ -1356,7 +1434,7 @@ export class Engine {
     const rc = new THREE.Raycaster();
     (rc as any).firstHitOnly = true;
     let lux = 0;
-    for (const L of s.lights) {
+    for (const L of this.resolveLights(s.lights)) {
       const e = illuminanceAt(L, p, hit.normal, skyLux);
       if (e <= 0) continue;
       const lp = new THREE.Vector3(...L.position);
@@ -1364,7 +1442,8 @@ export class Engine {
       const dist = dir.length();
       rc.set(p, dir.normalize());
       rc.far = dist - 0.05;
-      if (L.origin !== 'finestra' && rc.intersectObjects(occluders, true).length) continue;
+      const fr = (L as any).frameId ? this.props.get((L as any).frameId)?.obj : null;
+      if (L.origin !== 'finestra' && rc.intersectObjects(fr ? occluders.filter((o) => o !== fr) : occluders, true).length) continue;
       lux += e;
     }
     if (this.sun.visible) {
@@ -1599,6 +1678,21 @@ export class Engine {
     // le lampadine stanno dentro la loro luce: nel path tracing la nasconderebbero
     const hidden: THREE.Object3D[] = [];
     for (const o of this.furn.values()) o.obj.traverse((m: any) => { if (m.userData.bulb && m.visible) { m.visible = false; hidden.push(m); } });
+    // paralumi: nel path tracing il bagliore emissivo darebbe macchie (lo trova solo per caso);
+    // il tessuto lascia invece passare un quarto della luce della lampadina, e il bagliore visibile
+    // si aggiunge alla fine come le lampadine
+    const shades: { m: THREE.MeshStandardMaterial; t: boolean; o: number }[] = [];
+    for (const o of this.furn.values()) o.obj.traverse((x: any) => {
+      if (!x.isMesh || !x.userData.glow) return;
+      const m = x.material as THREE.MeshStandardMaterial;
+      if (shades.some((q) => q.m === m)) return;
+      shades.push({ m, t: m.transparent, o: m.opacity });
+      m.userData.glowI = m.emissiveIntensity;
+      m.emissiveIntensity = 0; m.transparent = true; m.opacity = 0.75;
+    });
+    // i teli di diffusione: la loro luce è già la sorgente virtuale
+    const frameMats: THREE.MeshStandardMaterial[] = [];
+    for (const o of this.props.values()) if (o.state.kind === 'diffusore') { const m = (o.obj.getObjectByName('pannello') as THREE.Mesh).material as THREE.MeshStandardMaterial; m.emissiveIntensity = 0; frameMats.push(m); }
     // fotografando da fuori, le pareti tra camera e stanza si tolgono (come le pareti mobili sul set)
     this.camera.updateMatrixWorld();
     this.updateCutaway(true);
@@ -1610,6 +1704,8 @@ export class Engine {
     this.scene.environmentIntensity = 1;
     this.shotRestore = () => {
       for (const m of hidden) m.visible = true;
+      for (const m of frameMats) m.emissiveIntensity = m.userData.glow || 0;
+      for (const q of shades) { q.m.emissiveIntensity = q.m.userData.glowI || 0; q.m.transparent = q.t; q.m.opacity = q.o; }
       this.scene.environment = null;
       this.selBox.visible = selVis;
     };
@@ -1651,8 +1747,9 @@ export class Engine {
     });
   }
 
-  buildPtLights(list: LightState[]) {
+  buildPtLights(raw: LightState[]) {
     const ptLights = new THREE.Group();
+    const list = this.resolveLights(raw);
     for (const L of list) {
       const fx = fixtureById(L.fixtureId);
       const lm = effectiveLumens(L, 0);
@@ -1664,19 +1761,28 @@ export class Engine {
         al.position.copy(pos);
         al.lookAt(tgt);
         ptLights.add(al);
+        // telo di diffusione: illuminato da dietro brilla anche verso la lampada (la parte riflessa)
+        if ((L as any).frameId) {
+          const back = new THREE.RectAreaLight(color, (lm * 0.4) / (Math.PI * w * h), w, h);
+          const out = tgt.clone().sub(pos).normalize();
+          back.position.copy(pos).addScaledVector(out, -0.06);
+          back.lookAt(back.position.clone().sub(out));
+          ptLights.add(back);
+        }
       } else if (fx.kind === 'spot') {
         const { beam, field } = spotAngles(L);
         const sl = new PhysicalSpotLight(color, spotCandela(lm, beam));
         sl.angle = THREE.MathUtils.degToRad(Math.min(170, field) / 2);
         sl.penumbra = Math.min(1, Math.max(0.05, 1 - beam / field));
         sl.decay = 2; sl.distance = 0;
-        sl.radius = (fx.radius || 0.05) * (1 + L.softness * 3);
+        // la diffusione sulla lente rende la sorgente grande quanto la lente
+        sl.radius = (fx.radius || 0.05) * (1 + L.softness * 3) + diffusionById(L.diffusion).spread * 0.15;
         sl.position.copy(pos);
         const t = new THREE.Object3D(); t.position.copy(tgt); ptLights.add(t); sl.target = t;
         ptLights.add(sl);
       } else {
         const pl = new THREE.PointLight(color, lm / (4 * Math.PI), 0, 2);
-        (pl as any).radius = (fx.radius || 0.03) * (1 + L.softness * 3);
+        (pl as any).radius = (fx.radius || 0.03) * (1 + L.softness * 3) + diffusionById(L.diffusion).spread * 0.08;
         pl.position.copy(pos);
         ptLights.add(pl);
       }
@@ -1728,6 +1834,26 @@ export class Engine {
       this.renderer.setRenderTarget(alb); this.renderer.render(this.scene, this.camera);
       for (const [o, m] of swapped) o.material = m;
       basics.forEach((b) => b.dispose());
+      // sorgenti visibili che il path tracing non vede direttamente (lampadine, teli di diffusione illuminati)
+      const emit = mk();
+      const swapped2: [THREE.Mesh, THREE.Material | THREE.Material[], boolean][] = [];
+      const black = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      const emitMats: THREE.Material[] = [black];
+      this.scene.traverse((o: any) => {
+        if (!o.isMesh || Array.isArray(o.material)) return;
+        const m = o.material as THREE.MeshStandardMaterial;
+        const wasVis = o.visible;
+        let mat: THREE.Material = black;
+        if (o.userData.bulb) { o.visible = true; mat = new THREE.MeshBasicMaterial({ color: m.emissive.clone().multiplyScalar(m.emissiveIntensity) }); emitMats.push(mat); }
+        else if (o.userData.glow && m.userData?.glowI) { mat = new THREE.MeshBasicMaterial({ color: m.emissive.clone().multiplyScalar(m.userData.glowI) }); emitMats.push(mat); }
+        else if (o.parent?.userData?.propId && o.name === 'pannello' && m.userData?.glow) { mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 1, 1).multiplyScalar(m.userData.glow), side: THREE.DoubleSide }); emitMats.push(mat); }
+        swapped2.push([o, o.material, wasVis]);
+        o.material = mat;
+      });
+      this.renderer.setClearColor(new THREE.Color(0, 0, 0), 1);
+      this.renderer.setRenderTarget(emit); this.renderer.render(this.scene, this.camera);
+      for (const [o, m, v] of swapped2) { o.material = m; o.visible = v; }
+      emitMats.forEach((b) => b.dispose());
       // normali e distanze
       const nm = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
       this.scene.overrideMaterial = nm;
@@ -1739,8 +1865,8 @@ export class Engine {
       nm.dispose();
       this.scene.overrideMaterial = prevOv; this.scene.background = prevBg; this.scene.environment = prevEnv;
       this.renderer.setClearColor(prevClear, prevAlpha);
-      const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H);
-      alb.dispose(); nrm.dispose(); dist.dispose();
+      const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H, emit.texture);
+      alb.dispose(); nrm.dispose(); dist.dispose(); emit.dispose();
       this.tmpRT = out;
       return out.texture;
     } catch (e) {
@@ -2023,7 +2149,7 @@ function buildProp(p: PropState) {
   g.userData.propId = p.id;
   let mat: THREE.Material;
   if (p.kind === 'bianco') mat = new THREE.MeshStandardMaterial({ color: 0xf2f2ef, roughness: 1, side: THREE.DoubleSide });
-  else if (p.kind === 'diffusore') mat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, transmission: 1, thickness: 0.001, ior: 1.2, side: THREE.DoubleSide, transparent: true, opacity: 0.55 });
+  else if (p.kind === 'diffusore') mat = new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 1, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
   else mat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.95, side: THREE.DoubleSide });
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
   panel.name = 'pannello';

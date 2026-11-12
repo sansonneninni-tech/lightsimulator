@@ -18,6 +18,7 @@ export interface Opening {
   width: number;
   height: number;
   sill: number;    // altezza del davanzale (0 per porte)
+  closed?: boolean; // oscurante chiuso: non entra luce
 }
 
 export interface RoomSpec {
@@ -99,8 +100,8 @@ export function fitOpening(r: RoomSpec, o: Opening, others: Opening[]): Opening 
   return { ...o, width, height, sill, offset };
 }
 
-export function windowInfos(r: RoomSpec): WindowInfoLite[] {
-  return r.openings.filter((o) => o.kind !== 'porta').map((o) => {
+export function windowInfos(r: RoomSpec, onlyOpen = false): WindowInfoLite[] {
+  return r.openings.filter((o) => o.kind !== 'porta' && !(onlyOpen && o.closed)).map((o) => {
     const f = wallFrame(r, o.wall);
     const c = f.origin.clone().addScaledVector(f.right, o.offset).setY(o.sill + o.height / 2);
     return { id: o.id, center: c.toArray() as any, normal: f.normal.toArray() as any, right: f.right.toArray() as any, width: o.width, height: o.height };
@@ -441,6 +442,11 @@ function buildOpening(o: Opening, f: ReturnType<typeof wallFrame>, dark: boolean
   place(new THREE.Mesh(new THREE.BoxGeometry(fw * 0.8, h, depth * 0.8), mat), 0, s + h / 2, n);
   if (o.kind === 'finestra' && h > 1.1) place(new THREE.Mesh(new THREE.BoxGeometry(w, fw * 0.8, depth * 0.8), mat), 0, s + h * 0.62, n);
   if (o.kind === 'portafinestra') place(new THREE.Mesh(new THREE.BoxGeometry(w, fw * 0.8, depth * 0.8), mat), 0, s + 0.95, n);
+  // oscurante chiuso: un telo scuro che riempie il vano (blocca sole e cielo, anche nello scatto)
+  if (o.closed) {
+    const bo = place(new THREE.Mesh(new THREE.BoxGeometry(w - 0.01, h - 0.01, 0.03), new THREE.MeshStandardMaterial({ color: new THREE.Color('#1c1c1e'), roughness: 0.95 })), 0, s + h / 2, -T * 0.15);
+    bo.name = 'oscurante';
+  }
   // davanzale interno
   if (s > 0.1) place(new THREE.Mesh(new THREE.BoxGeometry(w + 0.1, 0.03, 0.12), new THREE.MeshStandardMaterial({ color: new THREE.Color('#d9d6cf'), roughness: 0.4 })), 0, s - 0.015, 0.03);
   // superficie (fuori dalla scena) per selezionare l'apertura toccando il vano

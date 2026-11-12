@@ -69,15 +69,16 @@ void main(){
 
 const REMOD = `
 precision highp float;
-uniform sampler2D tIn; uniform sampler2D tAlb; uniform sampler2D tDist;
+uniform sampler2D tIn; uniform sampler2D tAlb; uniform sampler2D tDist; uniform sampler2D tEmit;
 varying vec2 vUv;
 void main(){
   vec3 c = texture2D(tIn, vUv).rgb;
-  if (texture2D(tDist, vUv).r > 500.0) { gl_FragColor = vec4(c, 1.0); return; }
-  gl_FragColor = vec4(c * max(texture2D(tAlb, vUv).rgb, vec3(0.03)), 1.0);
+  vec3 e = texture2D(tEmit, vUv).rgb;
+  if (texture2D(tDist, vUv).r > 500.0) { gl_FragColor = vec4(c + e, 1.0); return; }
+  gl_FragColor = vec4(c * max(texture2D(tAlb, vUv).rgb, vec3(0.03)) + e, 1.0);
 }`;
 
-export function denoise(renderer: THREE.WebGLRenderer, pt: THREE.Texture, alb: THREE.Texture, nrm: THREE.Texture, dist: THREE.Texture, W: number, H: number) {
+export function denoise(renderer: THREE.WebGLRenderer, pt: THREE.Texture, alb: THREE.Texture, nrm: THREE.Texture, dist: THREE.Texture, W: number, H: number, emit: THREE.Texture) {
   const mk = () => new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, colorSpace: THREE.LinearSRGBColorSpace });
   const A = mk(), B = mk();
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
@@ -99,7 +100,7 @@ export function denoise(renderer: THREE.WebGLRenderer, pt: THREE.Texture, alb: T
     run(ATROUS, { tIn: { value: src.texture }, tNrm: { value: nrm }, tDist: { value: dist }, texel: { value: texel }, stepW: { value: steps[i] }, sigL: { value: 4 } }, dst);
     [src, dst] = [dst, src];
   }
-  run(REMOD, { tIn: { value: src.texture }, tAlb: { value: alb }, tDist: { value: dist } }, dst);
+  run(REMOD, { tIn: { value: src.texture }, tAlb: { value: alb }, tDist: { value: dist }, tEmit: { value: emit } }, dst);
   renderer.setRenderTarget(null);
   src.dispose();
   quad.geometry.dispose();
