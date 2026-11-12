@@ -4,15 +4,18 @@ Strumento per direttori della fotografia: carichi la foto di un luogo, ottieni l
 
 ## Come si usa
 
-1. Trascina una foto del luogo nella pagina (o "prova con una stanza di esempio"). Puoi trascinarne fino a 6 dello stesso luogo: la prima dà il punto di vista, le altre vengono allineate alla prima e completano la stanza dove la prima non arriva (servono abbastanza dettagli in comune; una foto che non si allinea viene lasciata da parte con un avviso).
-2. L'app stima la profondità, ricostruisce la stanza e accende una alla volta le sorgenti di luce trovate (lampade, plafoniere, neon, finestre).
-3. Muoviti nella stanza: trascina per guardarti intorno, rotella o W A S D per camminare, Q/E per scendere e salire, tasto destro per spostarti di lato. `F` torna all'inquadratura della foto.
-4. Luci: trascina il punto per spostarla (Alt per l'altezza), il mirino per puntarla, l'anello in verticale per l'intensità in stop, la rotella per i Kelvin. Un tocco apre la scheda (intensità con lux e diaframma sul soggetto, Kelvin e gel, tipo di apparecchio; "Più" per morbidezza, fascio, diffusione, alette, fotometria). Doppio clic sulla scena aggiunge una luce già puntata ed esposta.
-5. Persone: 6 pose (in piedi, seduto, steso, in ginocchio, cammina, braccia conserte); doppio clic sull'anello per il manichino con le articolazioni.
-6. Camera: focale, sensore, ISO, diaframma, otturatore, fuoco (automatico sulla persona inquadrata o sul centro, oppure a distanza scelta), false color, esposimetro a luce incidente, mascherine di formato. La profondità di campo (circolo di confusione da focale, diaframma, sensore e fuoco) si vede nell'anteprima e nello scatto.
-7. In alto a destra: ora del giorno, stagione, meteo e orientamento per la luce dalle finestre.
-8. Il pulsante bianco scatta il render finale: stessi colori dell'anteprima, luci aggiunte in path tracing. Dal rullino: immagine, pianta luci, lista materiale (CSV) e PDF per la troupe.
-9. Spazio mostra la foto originale; Cmd+Z annulla; Cmd+S salva il progetto `.luce` da condividere.
+1. Scegli una stanza di partenza (soggiorno, camera da letto, cucina, ufficio, teatro di posa o stanza vuota). La stanza è subito arredata e illuminata dalle finestre e dalle lampade.
+2. **Stanza** nel dock: scheda *Arredi* per aggiungere 17 tipi di mobili (divano, poltrona, sedia, tavolo, letto, libreria, cucina, piante, lampade da terra, da tavolo e lampadari che fanno luce vera); scheda *Stanza* per misure, pareti, pavimento e per aggiungere finestre, portafinestre e porte sulla parete che stai guardando.
+3. Tocca un mobile o una finestra per sceglierli (riquadro bianco e scheda accanto), poi trascinali per spostarli. R gira il mobile di 90°, Canc lo toglie. Le lampade da tavolo restano sopra il mobile su cui stanno.
+4. Muoviti nella stanza: trascina per guardarti intorno, rotella o W A S D per camminare, Q/E per scendere e salire, tasto destro per spostarti di lato. `F` torna alla vista iniziale.
+5. Luci: trascina il punto per spostarla (Alt per l'altezza), il mirino per puntarla, l'anello in verticale per l'intensità in stop, la rotella per i Kelvin. Un tocco apre la scheda (intensità con lux e diaframma sul soggetto, Kelvin e gel, tipo di apparecchio; "Più" per morbidezza, fascio, diffusione, alette, fotometria). Doppio clic sulla scena aggiunge una luce già puntata ed esposta.
+6. Persone: 6 pose; doppio clic sull'anello per il manichino con le articolazioni.
+7. Camera: focale, sensore, ISO, diaframma, otturatore, fuoco, false color, esposimetro, formati, esposizione automatica.
+8. In alto a destra: ora del giorno, stagione, meteo e orientamento: il sole e il cielo entrano dalle finestre.
+9. Il pulsante bianco scatta il render finale: tutta la stanza in path tracing (luce che rimbalza su pareti e mobili, sole e cielo dalle finestre, lampade dentro i paralumi), ripulito dal rumore. Dal rullino: immagine, pianta luci con gli arredi, lista materiale (CSV) e PDF per la troupe.
+10. Cmd+Z annulla; Cmd+S salva il progetto `.luce` da condividere.
+
+Il caricamento da foto (ricostruzione della stanza dalla foto) è messo da parte: il codice resta in `src/project.ts` e `src/engine/reconstruct.ts` ma non è più nel percorso dell'app.
 
 ## Sviluppo
 
@@ -30,7 +33,8 @@ Tutto gira nel browser: nessun server, nessun costo di calcolo.
 
 ## Struttura
 
-- `src/engine/` fotometria, profondità, ricostruzione, allineamento delle foto in più (`register.ts`), sole, manichino, motore 3D
+- `src/engine/` motore 3D, stanza costruita (`room.ts`), arredi (`furniture.ts`), pulizia del rumore (`denoise.ts`), fotometria, sole, manichino; ricostruzione da foto (messa da parte)
+- `src/build.ts` modelli di stanza, modifica di stanza, arredi e aperture
 - `src/ui/` interfaccia (dock, schede, maniglie, visore)
 - `src/export/` pianta luci, lista materiale, PDF
 

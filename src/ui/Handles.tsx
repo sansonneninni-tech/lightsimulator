@@ -7,6 +7,7 @@ import { eng } from '../engineRef';
 import { lightColor, fixtureById } from '../engine/photometry';
 import { HANDLES, aimJoint, POSES } from '../engine/mannequin';
 import { clampToRoom } from '../actions';
+import { moveFurniture } from '../build';
 import { stopsLabel } from '../export/exports';
 import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
@@ -176,6 +177,13 @@ function LightHandle({ id, reg, color, on, sel, label, appear, win }: { id: stri
       } else {
         p = en.rayPlane(e.clientX, e.clientY, new THREE.Plane(new THREE.Vector3(0, 1, 0), -L.position[1]));
         if (!p || p.distanceTo(en.camera.position) > 40) return;
+      }
+      if (L.attached) {
+        // la luce di una lampada si sposta con la lampada
+        const f = st().furniture.find((x) => x.id === L.attached);
+        if (!f || e.altKey) return;
+        moveFurniture(f.id, { position: [f.position[0] + p.x - L.position[0], f.position[1], f.position[2] + p.z - L.position[2]] });
+        return;
       }
       clampToRoom(p, 0.1);
       st().updateLight(id, { position: p.toArray() as any });

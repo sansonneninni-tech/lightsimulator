@@ -13,6 +13,7 @@ import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection 
 import { stopsLabel, luxAtTarget } from '../export/exports';
 import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
+import { FurnitureCard, OpeningCard } from './Room';
 
 const MAIN_GELS = ['none', 'cto-quarter', 'cto-half', 'cto-full', 'ctb-half', 'ctb-full', 'plus-green', 'minus-green'];
 
@@ -125,7 +126,7 @@ export function LightCard({ id }: { id: string }) {
           )}
           <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>
           <div className="hint">Trascina il punto per spostarla (Alt per l'altezza), il mirino per puntarla, l'anello in verticale per l'intensità. Rotella: Kelvin.</div>
-          {!win && <><div className="hr" /><button className="more danger" onClick={removeSelection}>Rimuovi luce</button></>}
+          {!win && <><div className="hr" /><button className="more danger" onClick={removeSelection}>{L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'}</button></>}
         </div>
       )}
     </Pop>
@@ -207,5 +208,7 @@ export function SelectionCard() {
   if (!sel || shooting) return null;
   if (sel.type === 'light') return <LightCard key={key} id={sel.id} />;
   if (sel.type === 'person') return <PersonCard key={key} id={sel.id} />;
+  if (sel.type === 'furniture') return <FurnitureCard key={key} id={sel.id} />;
+  if (sel.type === 'opening') return <OpeningCard key={key} id={sel.id} />;
   return <PropCard key={key} id={sel.id} />;
 }

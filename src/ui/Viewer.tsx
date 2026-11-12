@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useStore, Shot } from '../store';
 import { eng } from '../engineRef';
+import { roomBounds, windowInfos } from '../engine/room';
 import { planSVG, svgToCanvas, kitRows, kitSummary, kitCSV, buildPDF, download, slug, cameraLine, sunLine, PlanInput } from '../export/exports';
 
 export function Roll() {
@@ -15,7 +16,9 @@ export function Roll() {
 }
 
 function planInput(shot: Shot): PlanInput | null {
-  const recon = useStore.getState().recon;
+  const st = useStore.getState();
+  const room = shot.scene.room || st.room;
+  const recon = room ? { room: roomBounds(room), windows: windowInfos(room), camera: { position: [0, 1.6, room.depth / 2 - 0.5] } } : st.recon;
   if (!recon) return null;
   const cp = (shot as any).camPos as [number, number, number] | undefined;
   const cd = (shot as any).camDir as [number, number, number] | undefined;

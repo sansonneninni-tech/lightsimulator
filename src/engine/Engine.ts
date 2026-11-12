@@ -12,6 +12,9 @@ import {
 import { PersonState, buildMannequin, applyPose } from './mannequin';
 import { SunState, sunDirection, sunSky } from './sun';
 import type { PropState, CamState, SceneSnapshot } from '../store';
+import { RoomSpec, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
+import { FurnitureState, buildFurniture } from './furniture';
+import { denoise } from './denoise';
 
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
@@ -120,6 +123,8 @@ void main(){
 
 interface LightObj { state: LightState; raster: THREE.Light; target: THREE.Object3D; doors: THREE.Group | null }
 
+export interface Grab { start?: () => void; move: (e: PointerEvent) => void; end?: () => void }
+
 export interface Hit { point: THREE.Vector3; normal: THREE.Vector3; object: THREE.Object3D }
 
 export class Engine {
@@ -195,6 +200,14 @@ export class Engine {
   lastTime = performance.now();
   disposed = false;
   navEnabled = true;
+  // stanza costruita a mano
+  built: RoomSpec | null = null;
+  furn = new Map<string, { state: FurnitureState; obj: THREE.Group; ceil: number }>();
+  skyTex: THREE.DataTexture | null = null;
+  selBox = new THREE.Box3Helper(new THREE.Box3(), 0xffffff);
+  selId: string | null = null;
+  picks: THREE.Mesh[] = [];
+  tmpRT: THREE.WebGLRenderTarget | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -223,11 +236,15 @@ export class Engine {
 
     this.scene.background = new THREE.Color(0x050506);
     this.scene.add(this.room, this.rasterLights, this.camera);
+    this.selBox.visible = false;
+    (this.selBox.material as THREE.LineBasicMaterial).transparent = true;
+    (this.selBox.material as THREE.LineBasicMaterial).opacity = 0.55;
+    this.scene.add(this.selBox);
     this.rasterLights.add(this.sun, this.sun.target, this.ambient);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
     this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.03;
+    this.sun.shadow.normalBias = 0.015;
     this.camera.filmGauge = 24.89;
     this.camera.apertureBlades = 0;
 
@@ -281,7 +298,7 @@ export class Engine {
 
   // focale equivalente per il campo visivo verticale della foto
   focalForPhoto(sensorId: string) {
-    if (!this.recon) return 24;
+    if (!this.recon) return 24 * ((SENSORS.find((s) => s.id === sensorId) || SENSORS[0]).width / 24.89);
     const sensor = SENSORS.find((s) => s.id === sensorId) || SENSORS[0];
     const w = Math.max(1, this.container.clientWidth), h = Math.max(1, this.container.clientHeight);
     const tanV = Math.tan(THREE.MathUtils.degToRad(this.recon.camera.fov) / 2);
@@ -293,6 +310,8 @@ export class Engine {
 
   // ---------------- ricostruzione ----------------
   loadRecon(recon: Reconstruction) {
+    this.clearBuilt();
+    this.picks = [];
     this.recon = recon;
     for (const c of [...this.room.children]) { this.room.remove(c); c.traverse((o: any) => { o.geometry?.dispose?.(); }); }
     this.surfaces = [];
@@ -485,6 +504,125 @@ export class Engine {
     this.dirty = true;
   }
 
+  // ---------------- stanza costruita a mano ----------------
+  get bounds(): { min: [number, number, number]; max: [number, number, number] } {
+    if (this.built) return roomBounds(this.built);
+    if (this.recon) return this.recon.room;
+    return { min: [-3, 0, -3], max: [3, 2.8, 3] };
+  }
+
+  windowList(): WindowInfoLite[] {
+    if (this.built) return windowInfos(this.built);
+    return this.recon?.windows || [];
+  }
+
+  clearBuilt() {
+    for (const [, o] of this.furn) this.scene.remove(o.obj);
+    this.furn.clear();
+    this.built = null;
+  }
+
+  loadRoom(spec: RoomSpec, resetView: boolean) {
+    const first = !this.built;
+    this.recon = null;
+    for (const c of [...this.room.children]) { this.room.remove(c); c.traverse((o: any) => { o.geometry?.dispose?.(); }); }
+    this.surfaces = []; this.panes = []; this.maskLin.clear(); this.extraMats = []; this.boxMats = [];
+    this.fillMesh = null; this.material = null; this.blurMaterial = null; this.photoLin = null; this.emissiveCanvas = null;
+    this.hasBase = false; this.quadMat.uniforms.relightW.value = 0;
+    this.built = spec;
+    const { group, surfaces, picks } = buildRoom(spec);
+    this.room.add(group);
+    this.surfaces = surfaces;
+    this.picks = picks;
+    this.K = 1;
+    // vista iniziale: da un angolo verso l'angolo opposto, come si entra in una stanza
+    const W = spec.width, D = spec.depth;
+    const m = Math.min(0.5, W * 0.1, D * 0.1);
+    const pos = new THREE.Vector3(W / 2 - m, Math.min(1.6, spec.height - 0.3), D / 2 - m);
+    const dir = new THREE.Vector3(-W * 0.22, 1.05, -D * 0.3).sub(pos);
+    this.homePose = {
+      pos,
+      quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.atan2(dir.y, Math.hypot(dir.x, dir.z)), Math.atan2(-dir.x, -dir.z), 0, 'YXZ')),
+      fov: 50,
+    };
+    if (resetView || first) this.resetView(); else { this.applyLook(); }
+    const b = this.bounds;
+    const size = new THREE.Vector3(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+    const r = size.length() / 2 + 0.6;
+    const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
+    sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.1; sc.far = r * 4; sc.updateProjectionMatrix();
+    // le lampade appese seguono l'altezza del soffitto
+    for (const [id, o] of this.furn) if (o.ceil !== spec.height) { this.scene.remove(o.obj); this.furn.delete(id); }
+    if (this.snapshot) this.syncSun(this.snapshot.sun);
+    this.dirty = true;
+  }
+
+  syncFurniture(list: FurnitureState[]) {
+    const ids = new Set(list.map((f) => f.id));
+    for (const [id, o] of this.furn) if (!ids.has(id)) { this.scene.remove(o.obj); this.furn.delete(id); }
+    const ceil = this.built?.height || 2.8;
+    for (const f of list) {
+      let o = this.furn.get(f.id);
+      if (!o || o.state.kind !== f.kind || o.state.color !== f.color || o.ceil !== ceil) {
+        if (o) this.scene.remove(o.obj);
+        const obj = buildFurniture(f, ceil);
+        obj.userData.furnitureId = f.id;
+        this.scene.add(obj);
+        o = { state: f, obj, ceil };
+        this.furn.set(f.id, o);
+      }
+      o.state = f;
+      o.obj.position.set(...f.position);
+      o.obj.rotation.set(0, THREE.MathUtils.degToRad(f.rotationY), 0);
+      o.obj.updateMatrixWorld(true);
+    }
+    this.updateSelBox();
+    this.updateGlow();
+  }
+
+  setSelected(id: string | null) {
+    this.selId = id;
+    this.updateSelBox();
+    this.dirty = true;
+  }
+
+  updateSelBox() {
+    const o = this.selId ? this.furn.get(this.selId) : null;
+    if (o) { this.selBox.box.setFromObject(o.obj); this.selBox.visible = true; return; }
+    // apertura (finestra, porta): il riquadro del suo telaio
+    const box = new THREE.Box3();
+    if (this.selId) this.room.traverse((m: any) => { if (m.isMesh && m.userData.openingId === this.selId) box.expandByObject(m); });
+    if (!box.isEmpty()) { this.selBox.box.copy(box.expandByScalar(0.02)); this.selBox.visible = true; return; }
+    this.selBox.visible = false;
+  }
+
+  // lampadine e paralumi accesi come la loro luce
+  updateGlow() {
+    if (!this.snapshot) return;
+    const lights = this.snapshot.lights;
+    for (const [id, o] of this.furn) {
+      const L = lights.find((l) => l.attached === id);
+      const lm = L && L.on ? effectiveLumens(L, 0) : 0;
+      const col = L ? lightColor(L.kelvin, L.gel) : new THREE.Color(1, 1, 1);
+      o.obj.traverse((m: any) => {
+        if (!m.isMesh) return;
+        if (m.userData.bulb) {
+          const r = (m.geometry as THREE.SphereGeometry).parameters.radius;
+          m.material.emissive.copy(col);
+          m.material.emissiveIntensity = lm / (Math.PI * 4 * Math.PI * r * r);
+        } else if (m.userData.glow) {
+          const g = m.geometry as THREE.CylinderGeometry;
+          const rr = (g.parameters.radiusTop + g.parameters.radiusBottom) / 2;
+          // luce che attraversa il tessuto (circa un quarto), distribuita sul paralume
+          m.material.emissive.copy(col).multiply(new THREE.Color(1, 0.93, 0.82));
+          m.material.emissiveIntensity = (lm * 0.25) / (Math.PI * 2 * Math.PI * rr * g.parameters.height * 2);
+        }
+      });
+    }
+  }
+
+  furnitureObjects() { return [...this.furn.values()].map((f) => f.obj); }
+
   buildBox(recon: Reconstruction, mat: THREE.MeshStandardMaterial) {
     const [x0, y0, z0] = recon.room.min, [x1, y1, z1] = recon.room.max;
     const camPos = new THREE.Vector3(...recon.camera.position);
@@ -600,6 +738,9 @@ export class Engine {
     if (!prev || prev.sun !== s.sun) this.syncSun(s.sun);
     if (!prev || prev.people !== s.people) this.syncPeople(s.people);
     if (!prev || prev.props !== s.props) this.syncProps(s.props);
+    if (s.room && (!prev || prev.room !== s.room || !this.built)) { this.loadRoom(s.room, false); this.updateSelBox(); }
+    if (!prev || prev.furniture !== s.furniture || prev.room !== s.room) this.syncFurniture(s.furniture || []);
+    if (!prev || prev.lights !== s.lights) this.updateGlow();
     if (!prev || prev.lights !== s.lights || prev.ambient !== s.ambient || prev.sun !== s.sun) this.updateEmissive();
     this.updateIndirect();
     this.quadMat.uniforms.falseColor.value = s.cam.falseColor ? 1 : 0;
@@ -611,7 +752,8 @@ export class Engine {
     if (!c) return;
     this.exposure = exposureFromEV100(ev100(c.fStop, c.shutter, c.iso));
     this.quadMat.uniforms.exposure.value = this.exposure;
-    this.camera.fStop = c.fStop;
+    // la profondità di campo si calcola dopo (uguale in anteprima e nello scatto)
+    this.camera.fStop = 1e9;
   }
 
   skyLux() {
@@ -699,11 +841,12 @@ export class Engine {
   syncSun(s: SunState) {
     const { dir, elevation } = sunDirection(s);
     const sk = sunSky(s);
-    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && !!this.recon?.windows.length;
+    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && this.windowList().length > 0;
     this.sun.visible = on;
     this.sun.intensity = on ? sk.sunLux : 0;
     this.sun.color.copy(lightColor(sk.sunK, 'none'));
-    const c = this.recon ? new THREE.Vector3((this.recon.room.min[0] + this.recon.room.max[0]) / 2, 1.2, (this.recon.room.min[2] + this.recon.room.max[2]) / 2) : new THREE.Vector3();
+    const bb = this.bounds;
+    const c = new THREE.Vector3((bb.min[0] + bb.max[0]) / 2, 1.2, (bb.min[2] + bb.max[2]) / 2);
     const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
     this.sun.position.copy(c).addScaledVector(dir, sc.far / 2);
     this.sun.target.position.copy(c);
@@ -713,6 +856,18 @@ export class Engine {
     for (const p of this.panes) {
       (p.mesh.material as THREE.MeshPhysicalMaterial).emissiveIntensity = this.K * Math.max(0.002, f);
     }
+    // stanza costruita: cielo e terreno fuori dalle finestre
+    if (this.built) {
+      const skyLux = s.enabled ? sk.skyLux : 0.3;
+      const groundLux = (on ? sk.sunLux * Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation))) : 0) + skyLux;
+      const skyCol = lightColor(sk.skyK, 'none');
+      this.skyTex = skyTexture(skyLux / Math.PI, skyCol, (0.18 * groundLux) / Math.PI, this.skyTex || undefined);
+      this.scene.background = this.skyTex;
+      this.scene.backgroundIntensity = 1;
+    } else if (this.scene.background === this.skyTex) {
+      this.scene.background = new THREE.Color(0x050506);
+    }
+    this.dirty = true;
   }
 
   syncPeople(list: PersonState[]) {
@@ -737,6 +892,7 @@ export class Engine {
   }
 
   groundAt(x: number, z: number) {
+    if (this.built) return 0;
     // quota del pavimento letto attorno ai piedi (mediana su una piccola griglia)
     const ys: number[] = [];
     const rc = new THREE.Raycaster();
@@ -825,21 +981,25 @@ export class Engine {
 
   // luce indiretta stimata (sfera integratrice) per l'anteprima
   updateIndirect() {
-    if (!this.recon || !this.snapshot) return;
+    if ((!this.recon && !this.built) || !this.snapshot) return;
     const s = this.snapshot;
     const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
     let flux = 0;
     for (const L of s.lights) if (L.on) flux += effectiveLumens(L, skyLux) * (fixtureById(L.fixtureId).kind === 'spot' && L.origin !== 'finestra' ? 0.7 : 1);
     if (this.sun.visible) {
       const { dir } = sunDirection(s.sun);
-      for (const w of this.recon.windows) flux += this.sun.intensity * w.width * w.height * Math.max(0, -dir.dot(new THREE.Vector3(...w.normal))) * 0.85;
+      for (const w of this.windowList()) flux += this.sun.intensity * w.width * w.height * Math.max(0, -dir.dot(new THREE.Vector3(...w.normal))) * 0.85;
     }
-    const [x0, y0, z0] = this.recon.room.min, [x1, y1, z1] = this.recon.room.max;
-    const W = x1 - x0, H = y1 - y0, D = Math.min(z1, 0.5) - z0;
+    const [x0, y0, z0] = this.bounds.min, [x1, y1, z1] = this.bounds.max;
+    const W = x1 - x0, H = y1 - y0, D = (this.built ? z1 : Math.min(z1, 0.5)) - z0;
     const A = 2 * (W * H + W * D + H * D);
-    const rho = 0.4;
+    const rho = this.built ? builtReflectance(this.built) : 0.4;
     const E = (flux * rho) / (A * (1 - rho));
-    this.ambient.intensity = E * 0.8;
+    // stanza costruita: tarata sullo scatto in path tracing (la luce rimbalzata è meno di una sfera ideale
+    // e prende il colore del pavimento)
+    this.ambient.intensity = E * (this.built ? 0.45 : 0.8);
+    if (this.built) this.ambient.color.copy(FLOOR_TINT[this.built.floor] || new THREE.Color(1, 1, 1));
+    else this.ambient.color.setRGB(1, 1, 1);
   }
 
   // ---------------- calibrazione dell'esposizione sulla foto ----------------
@@ -888,6 +1048,42 @@ export class Engine {
     return { iso: isoSnap, fStop, shutter };
   }
 
+  // esposizione automatica per l'interno (le finestre, molto più chiare, non contano)
+  autoExposure(): { iso: number; fStop: number; shutter: number } | null {
+    if (!this.snapshot) return null;
+    const w = 160, h = Math.max(2, Math.round(160 / this.camera.aspect));
+    const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType });
+    const sel = this.selBox.visible;
+    this.selBox.visible = false;
+    this.camera.updateMatrixWorld();
+    this.renderer.setRenderTarget(rt);
+    this.renderer.render(this.scene, this.camera);
+    const buf = new Float32Array(w * h * 4);
+    this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+    this.renderer.setRenderTarget(null);
+    rt.dispose();
+    this.selBox.visible = sel;
+    const lums: number[] = [];
+    for (let i = 0; i < w * h; i++) lums.push(0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2]);
+    lums.sort((a, b) => a - b);
+    const cut = lums.slice(Math.floor(lums.length * 0.05), Math.floor(lums.length * 0.85));
+    const M = cut.reduce((a, b) => a + b, 0) / Math.max(1, cut.length);
+    if (!(M > 1e-7)) return null;
+    this.dirty = true;
+    return this.settingsFor(0.2 / M);
+  }
+
+  settingsFor(e: number) {
+    const shutter = 1 / 50;
+    let fStop = 2.8;
+    const ev = Math.log2(1 / (1.2 * e));
+    let iso = (100 * (fStop * fStop) / shutter) / Math.pow(2, ev);
+    if (iso > 12800) { fStop = FSTOPS.filter((f) => f >= 1.4).find((f) => (100 * f * f / shutter) / Math.pow(2, ev) <= 12800) || 1.4; iso = (100 * fStop * fStop / shutter) / Math.pow(2, ev); }
+    if (iso < 100) { fStop = FSTOPS.find((f) => (100 * f * f / shutter) / Math.pow(2, ev) >= 100) || 22; iso = (100 * fStop * fStop / shutter) / Math.pow(2, ev); }
+    const isoSnap = ISO_VALUES.reduce((a, b) => (Math.abs(Math.log2(b / iso)) < Math.abs(Math.log2(a / iso)) ? b : a));
+    return { iso: isoSnap, fStop, shutter };
+  }
+
   // ---------------- vista ----------------
   resetView() {
     if (!this.homePose) return;
@@ -911,8 +1107,8 @@ export class Engine {
   }
 
   clampCamera() {
-    if (!this.recon) return;
-    const { min, max } = this.recon.room;
+    if (!this.recon && !this.built) return;
+    const { min, max } = this.bounds;
     const p = this.camera.position;
     p.x = Math.min(max[0] - 0.15, Math.max(min[0] + 0.15, p.x));
     p.y = Math.min(max[1] - 0.1, Math.max(0.15, p.y));
@@ -926,17 +1122,25 @@ export class Engine {
 
   bindNav() {
     const el = this.renderer.domElement;
-    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean } | null = null;
+    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; grab?: Grab | null } | null = null;
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerdown', (e) => {
       if (!this.navEnabled) return;
-      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey };
+      const grab = e.button === 0 ? this.onGrab?.(e) : null;
+      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, grab };
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
       if (!drag || !this.navEnabled) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+      if (drag.grab) {
+        if (!drag.moved) drag.grab.start?.();
+        drag.moved = true;
+        drag.grab.move(e);
+        this.dirty = true;
+        return;
+      }
       drag.moved = true;
       drag.x = e.clientX; drag.y = e.clientY;
       if (drag.btn === 2 || drag.btn === 1 || drag.shift) {
@@ -952,8 +1156,14 @@ export class Engine {
     });
     const end = (e: PointerEvent) => {
       if (drag && !drag.moved) this.onClick?.(e);
+      if (drag?.grab && drag.moved) drag.grab.end?.();
       drag = null;
     };
+    el.addEventListener('pointermove', (e) => {
+      if (drag) return;
+      const g = this.onHover?.(e);
+      el.style.cursor = g ? 'grab' : '';
+    });
     el.addEventListener('pointerup', end);
     el.addEventListener('pointercancel', () => (drag = null));
     el.addEventListener('wheel', (e) => {
@@ -975,6 +1185,8 @@ export class Engine {
   }
 
   onClick: ((e: PointerEvent) => void) | null = null;
+  onGrab: ((e: PointerEvent) => Grab | null) | null = null;
+  onHover: ((e: PointerEvent) => boolean) | null = null;
   onDoubleClick: ((e: MouseEvent) => void) | null = null;
 
   // ---------------- picking ----------------
@@ -987,7 +1199,7 @@ export class Engine {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(this.ndc(clientX, clientY), this.camera);
     (rc as any).firstHitOnly = true;
-    const list = objects || [...this.surfaces, ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)];
+    const list = objects || [...this.picks, ...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)];
     const hits = rc.intersectObjects(list, true).filter((h) => (h.object as any).visible !== false);
     if (!hits.length) return null;
     const h = hits[0];
@@ -1031,7 +1243,7 @@ export class Engine {
     const s = this.snapshot;
     const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
     const p = hit.point.clone().addScaledVector(hit.normal, 0.01);
-    const occluders = [...this.surfaces, ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
+    const occluders = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
     const rc = new THREE.Raycaster();
     (rc as any).firstHitOnly = true;
     let lux = 0;
@@ -1112,14 +1324,14 @@ export class Engine {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(new THREE.Vector2(0, 0), this.camera);
     (rc as any).firstHitOnly = true;
-    const h = rc.intersectObjects([...this.surfaces, ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)], true)[0];
+    const h = rc.intersectObjects([...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)], true)[0];
     return h ? Math.max(0.3, h.distance) : 3;
   }
 
   // parametri della profondità di campo; false se tutto è a fuoco
   setupDof(target: { width: number; height: number }): boolean {
     const c = this.cam;
-    if (!c || !this.recon) return false;
+    if (!c || (!this.recon && !this.built)) return false;
     const sensor = SENSORS.find((x) => x.id === c.sensor) || SENSORS[0];
     const f = c.focal, N = c.fStop;
     const S = Math.max(this.focusDistance() * 1000, f * 1.5);
@@ -1232,6 +1444,7 @@ export class Engine {
   // la stessa esposizione e lo stesso bilanciamento dell'anteprima, solo più pulito.
   async shoot(onProgress: (p: number) => void, samples = 384): Promise<HTMLCanvasElement | null> {
     if (this.shot || !this.snapshot) return null;
+    if (this.built) return this.shootBuilt(onProgress, Math.max(samples, 1200));
     const s = this.snapshot;
     const added = s.lights.filter((L) => L.on && L.origin === 'aggiunta' && effectiveLumens(L, 0) > 0);
     if (!added.length) {
@@ -1239,8 +1452,94 @@ export class Engine {
       await new Promise((r) => setTimeout(r, 30));
       return this.composeShot(null);
     }
+    const ptLights = this.buildPtLights(added);
+    this.scene.remove(this.rasterLights);
+    this.scene.add(ptLights);
+    ptLights.updateMatrixWorld(true);
+    this.initPT();
+    this.pt.bounces = 4;
+    // solo la luce delle sorgenti aggiunte: la stanza non emette (la sua luce è già nella foto)
+    const saved: [THREE.MeshStandardMaterial, number][] = [];
+    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material), ...this.extraMats.map((x) => x.mat), ...this.boxMats.map((x) => x[0])].filter(Boolean) as THREE.MeshStandardMaterial[];
+    for (const m of roomMats) { saved.push([m, m.emissiveIntensity]); m.emissiveIntensity = 0; }
+    this.shotRestore = () => { for (const [m, ei] of saved) m.emissiveIntensity = ei; };
+    const prevBg = this.scene.background;
+    this.scene.background = new THREE.Color(0, 0, 0);
+    this.scene.environment = null;
+    return this.startPT(onProgress, samples, ptLights, prevBg);
+  }
+
+  // stanza costruita: tutta la scena in path tracing (luci, lampade, sole e cielo dalle finestre)
+  async shootBuilt(onProgress: (p: number) => void, samples: number): Promise<HTMLCanvasElement | null> {
+    const s = this.snapshot!;
+    const list = s.lights.filter((L) => L.on && L.origin !== 'finestra' && effectiveLumens(L, 0) > 0);
+    const ptLights = this.buildPtLights(list);
+    if (this.sun.visible && this.sun.intensity > 0) {
+      const d = new THREE.DirectionalLight(this.sun.color.clone(), this.sun.intensity);
+      d.position.copy(this.sun.position);
+      const t = new THREE.Object3D(); t.position.copy(this.sun.target.position);
+      ptLights.add(t); d.target = t;
+      ptLights.add(d);
+    }
+    this.scene.remove(this.rasterLights);
+    this.scene.add(ptLights);
+    ptLights.updateMatrixWorld(true);
+    this.initPT();
+    this.pt.bounces = 6;
+    // le lampadine stanno dentro la loro luce: nel path tracing la nasconderebbero
+    const hidden: THREE.Object3D[] = [];
+    for (const o of this.furn.values()) o.obj.traverse((m: any) => { if (m.userData.bulb && m.visible) { m.visible = false; hidden.push(m); } });
+    const selVis = this.selBox.visible;
+    this.selBox.visible = false;
+    const prevBg = this.scene.background;
+    this.scene.environment = this.skyTex;
+    this.scene.environmentIntensity = 1;
+    this.shotRestore = () => {
+      for (const m of hidden) m.visible = true;
+      this.scene.environment = null;
+      this.selBox.visible = selVis;
+    };
+    return this.startPT(onProgress, samples, ptLights, prevBg);
+  }
+
+  initPT() {
+    if (!this.pt) {
+      this.pt = new WebGLPathTracer(this.renderer);
+      this.pt.tiles.set(2, 2);
+      this.pt.minSamples = 1;
+      this.pt.renderDelay = 0;
+      this.pt.fadeDuration = 0;
+      this.pt.dynamicLowRes = false;
+      this.pt.filterGlossyFactor = 0.5;
+      this.pt.textureSize.set(2048, 2048);
+      // durante il calcolo resta a schermo l'anteprima
+      this.pt.renderToCanvas = false;
+      this.pt.rasterizeScene = false;
+    }
+    this.pt.multipleImportanceSampling = true;
+    this.renderer.toneMapping = THREE.NoToneMapping;
+  }
+
+  async startPT(onProgress: (p: number) => void, samples: number, ptLights: THREE.Group, prevBg: any): Promise<HTMLCanvasElement | null> {
+    this.ambient.visible = false;
+    try {
+      await new Promise((r) => setTimeout(r, 30));
+      this.pt.setScene(this.scene, this.camera);
+    } catch (e) {
+      console.error(e);
+      this.finishShot(ptLights, prevBg);
+      return this.composeShot(null);
+    }
+    this.pt.reset();
+    return new Promise((resolve) => {
+      this.shot = { target: samples, start: performance.now(), onProgress, resolve, ptLights };
+      (this.shot as any).prevBg = prevBg;
+    });
+  }
+
+  buildPtLights(list: LightState[]) {
     const ptLights = new THREE.Group();
-    for (const L of added) {
+    for (const L of list) {
       const fx = fixtureById(L.fixtureId);
       const lm = effectiveLumens(L, 0);
       const color = lightColor(L.kelvin, L.gel);
@@ -1268,48 +1567,7 @@ export class Engine {
         ptLights.add(pl);
       }
     }
-    this.scene.remove(this.rasterLights);
-    this.scene.add(ptLights);
-    ptLights.updateMatrixWorld(true);
-
-    if (!this.pt) {
-      this.pt = new WebGLPathTracer(this.renderer);
-      this.pt.tiles.set(2, 2);
-      this.pt.minSamples = 1;
-      this.pt.renderDelay = 0;
-      this.pt.fadeDuration = 0;
-      this.pt.dynamicLowRes = false;
-      this.pt.filterGlossyFactor = 0.5;
-      this.pt.textureSize.set(2048, 2048);
-      // durante il calcolo resta a schermo l'anteprima
-      this.pt.renderToCanvas = false;
-      this.pt.rasterizeScene = false;
-    }
-    this.pt.multipleImportanceSampling = true;
-    this.pt.bounces = 4;
-    this.renderer.toneMapping = THREE.NoToneMapping;
-    // solo la luce delle sorgenti aggiunte: la stanza non emette (la sua luce è già nella foto)
-    const saved: [THREE.MeshStandardMaterial, number][] = [];
-    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material), ...this.extraMats.map((x) => x.mat), ...this.boxMats.map((x) => x[0])].filter(Boolean) as THREE.MeshStandardMaterial[];
-    for (const m of roomMats) { saved.push([m, m.emissiveIntensity]); m.emissiveIntensity = 0; }
-    this.shotRestore = () => { for (const [m, ei] of saved) m.emissiveIntensity = ei; };
-    const prevBg = this.scene.background;
-    this.scene.background = new THREE.Color(0, 0, 0);
-    this.scene.environment = null;
-    this.ambient.visible = false;
-    try {
-      await new Promise((r) => setTimeout(r, 30));
-      this.pt.setScene(this.scene, this.camera);
-    } catch (e) {
-      console.error(e);
-      this.finishShot(ptLights, prevBg);
-      return this.composeShot(null);
-    }
-    this.pt.reset();
-    return new Promise((resolve) => {
-      this.shot = { target: samples, start: performance.now(), onProgress, resolve, ptLights };
-      (this.shot as any).prevBg = prevBg;
-    });
+    return ptLights;
   }
 
   tickShot() {
@@ -1317,15 +1575,64 @@ export class Engine {
     this.pt.renderSample();
     const smp = this.pt.samples;
     const elapsed = (performance.now() - sh.start) / 1000;
-    const cap = Number(new URLSearchParams(location.search).get('cap')) || 120;
+    const cap = Number(new URLSearchParams(location.search).get('cap')) || (this.built ? 90 : 120);
     const p = Math.min(1, Math.max(smp / sh.target, elapsed / cap));
     (window as any).__ptSamples = smp;
     sh.onProgress(Math.min(0.99, p));
     if (p >= 1) {
-      const add = this.readAdded();
+      const add = this.built ? this.denoisedShot() : this.readAdded();
       const resolve = sh.resolve;
       this.finishShot(sh.ptLights, (sh as any).prevBg);
       resolve(this.composeShot(add));
+    }
+  }
+
+  // stanza costruita: path tracing ripulito dal rumore con l'aiuto di colore, normali e distanze
+  denoisedShot(): THREE.Texture | null {
+    try {
+      const tgt = this.pt.target as THREE.WebGLRenderTarget;
+      const W = tgt.width, H = tgt.height;
+      if (!W || !H) return null;
+      const mk = () => new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, colorSpace: THREE.LinearSRGBColorSpace });
+      const alb = mk(), nrm = mk(), dist = mk();
+      const prevBg = this.scene.background, prevEnv = this.scene.environment, prevOv = this.scene.overrideMaterial;
+      const prevClear = this.renderer.getClearColor(new THREE.Color()), prevAlpha = this.renderer.getClearAlpha();
+      this.scene.background = null; this.scene.environment = null;
+      this.camera.updateMatrixWorld();
+      // colore delle superfici
+      const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
+      const basics: THREE.Material[] = [];
+      this.scene.traverse((o: any) => {
+        if (!o.isMesh || Array.isArray(o.material)) return;
+        const m = o.material as THREE.MeshStandardMaterial;
+        const b = new THREE.MeshBasicMaterial({ color: m.color ? m.color.clone() : new THREE.Color(1, 1, 1), map: m.map || null, side: m.side, visible: m.visible });
+        if (m.emissiveIntensity > 0 && !m.map && (m.color?.r ?? 1) > 0.8) b.color.setRGB(1, 1, 1);
+        swapped.push([o, o.material]); basics.push(b);
+        o.material = b;
+      });
+      this.renderer.setClearColor(new THREE.Color(1, 1, 1), 1);
+      this.renderer.setRenderTarget(alb); this.renderer.render(this.scene, this.camera);
+      for (const [o, m] of swapped) o.material = m;
+      basics.forEach((b) => b.dispose());
+      // normali e distanze
+      const nm = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
+      this.scene.overrideMaterial = nm;
+      this.renderer.setClearColor(new THREE.Color(0.5, 0.5, 1), 1);
+      this.renderer.setRenderTarget(nrm); this.renderer.render(this.scene, this.camera);
+      this.scene.overrideMaterial = this.distMat;
+      this.renderer.setClearColor(new THREE.Color(1000, 0, 0), 1);
+      this.renderer.setRenderTarget(dist); this.renderer.render(this.scene, this.camera);
+      nm.dispose();
+      this.scene.overrideMaterial = prevOv; this.scene.background = prevBg; this.scene.environment = prevEnv;
+      this.renderer.setClearColor(prevClear, prevAlpha);
+      const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H);
+      alb.dispose(); nrm.dispose(); dist.dispose();
+      this.tmpRT = out;
+      return out.texture;
+    } catch (e) {
+      console.warn(e);
+      this.renderer.setRenderTarget(null);
+      return this.readAdded();
     }
   }
 
@@ -1350,11 +1657,12 @@ export class Engine {
   }
 
   // compone lo scatto: anteprima senza le luci aggiunte + luci aggiunte in path tracing
-  composeShot(add: THREE.DataTexture | null): HTMLCanvasElement | null {
+  composeShot(add: THREE.Texture | null): HTMLCanvasElement | null {
     const s = this.snapshot;
     if (!s) return null;
     const hidden: THREE.Light[] = [];
-    if (add) {
+    const builtPT = !!(this.built && add);
+    if (add && !builtPT) {
       for (const o of this.lightObjs.values()) if (o.state.origin === 'aggiunta' && o.raster.visible) { o.raster.visible = false; hidden.push(o.raster); }
       // luce indiretta stimata solo dalle luci rimaste (quella delle aggiunte è nel path tracing)
       this.snapshot = { ...s, lights: s.lights.filter((L) => L.origin !== 'aggiunta') };
@@ -1367,10 +1675,15 @@ export class Engine {
     let canvas: HTMLCanvasElement | null = null;
     try {
       this.camera.updateMatrixWorld();
-      this.renderer.setRenderTarget(this.rt);
-      this.renderer.render(this.scene, this.camera);
-      this.updateRelight();
-      u.tAdd.value = add; u.addW.value = add ? 1 : 0;
+      if (builtPT) {
+        // l'immagine è tutta nel path tracing
+        u.tDiffuse.value = add;
+      } else {
+        this.renderer.setRenderTarget(this.rt);
+        this.renderer.render(this.scene, this.camera);
+        this.updateRelight();
+        u.tAdd.value = add; u.addW.value = add ? 1 : 0;
+      }
       const prevMask = u.maskAlpha.value; u.maskAlpha.value = 1;
       const prevFc = u.falseColor.value; u.falseColor.value = 0;
       this.present(out);
@@ -1397,9 +1710,10 @@ export class Engine {
       this.renderer.setRenderTarget(null);
       out.dispose();
       u.tAdd.value = null; u.addW.value = 0;
-      add?.dispose();
+      u.tDiffuse.value = this.rt.texture;
+      if (this.tmpRT) { this.tmpRT.dispose(); this.tmpRT = null; } else add?.dispose();
       for (const l of hidden) l.visible = true;
-      if (add) this.updateIndirect();
+      if (add && !builtPT) this.updateIndirect();
       this.dirty = true;
     }
     return canvas;
@@ -1609,4 +1923,16 @@ function buildProp(p: PropState) {
   pole.userData.propId = p.id;
   g.add(pole);
   return g;
+}
+
+// riflettanza media della stanza costruita (per la luce indiretta stimata dell'anteprima)
+const WALL_RHO: Record<string, number> = { bianco: 0.72, grigio: 0.42, sabbia: 0.55, salvia: 0.36, terracotta: 0.2, notte: 0.05, nero: 0.03, mattoni: 0.18 };
+const FLOOR_RHO: Record<string, number> = { rovere: 0.35, noce: 0.1, cemento: 0.3, piastrelle: 0.6, marmo: 0.7, moquette: 0.15 };
+const FLOOR_TINT: Record<string, THREE.Color> = {
+  rovere: new THREE.Color(1.08, 0.97, 0.85), noce: new THREE.Color(1.06, 0.97, 0.9), moquette: new THREE.Color(1, 1, 1),
+  cemento: new THREE.Color(1, 1, 0.98), piastrelle: new THREE.Color(1.02, 1, 0.97), marmo: new THREE.Color(1, 1, 1),
+};
+function builtReflectance(r: RoomSpec) {
+  const Aw = 2 * (r.width + r.depth) * r.height, Af = r.width * r.depth;
+  return Math.min(0.75, ((WALL_RHO[r.wall] ?? 0.5) * Aw + (FLOOR_RHO[r.floor] ?? 0.3) * Af + 0.78 * Af) / (Aw + 2 * Af));
 }

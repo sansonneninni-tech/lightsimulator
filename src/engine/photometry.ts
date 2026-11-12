@@ -162,6 +162,8 @@ export interface LightState {
   barnDoors: { top: number; bottom: number; left: number; right: number }; // gradi di chiusura 0-90
   on: boolean;
   origin: 'letta' | 'aggiunta' | 'finestra';
+  attached?: string;     // id dell'arredo (lampada) a cui appartiene
+  windowId?: string;     // id dell'apertura (finestre della stanza costruita)
 }
 
 let _id = 0;

@@ -166,7 +166,7 @@ function orientSunSaved(saved: any, recon: Reconstruction) {
 
 export function snapshotOf(): SceneSnapshot {
   const s = useStore.getState();
-  return { lights: s.lights, people: s.people, props: s.props, sun: s.sun, cam: s.cam, ambient: s.ambient };
+  return { lights: s.lights, people: s.people, props: s.props, sun: s.sun, cam: s.cam, ambient: s.ambient, room: s.room, furniture: s.furniture };
 }
 
 function f32ToB64(a: Float32Array) {
@@ -182,9 +182,22 @@ function b64ToF32(b: string) {
   return new Float32Array(u.buffer);
 }
 
+function downloadJSON(data: any, name: string) {
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(name || 'scena').replace(/[^\w\- àèéìòù]+/gi, '').trim() || 'scena'}.luce`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
 export function saveProject() {
   const s = useStore.getState();
   const e = eng();
+  if (s.room) {
+    downloadJSON({ app: 'lightsimulator', version: 2, kind: 'stanza', placeName: s.placeName, scene: snapshotOf(), shots: s.shots }, s.placeName);
+    s.showToast('Progetto salvato. Puoi riaprirlo o mandarlo a chi lavora con te.');
+    return;
+  }
   if (!s.recon || !e) return;
   const r = s.recon;
   const data = {
@@ -214,6 +227,19 @@ export async function openProject(file: File) {
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'lightsimulator') throw new Error('formato');
+    if (data.kind === 'stanza') {
+      const e = eng()!;
+      const sc = data.scene;
+      e.clearBuilt();
+      useStore.setState({
+        phase: 'ready', status: '', recon: null, photos: [], placeName: data.placeName || 'Stanza',
+        room: sc.room, furniture: sc.furniture || [], lights: sc.lights || [], people: sc.people || [], props: sc.props || [],
+        sun: sc.sun, cam: sc.cam, ambient: 0, shots: data.shots || [], past: [], future: [], selection: null, manikin: null,
+      });
+      e.apply(snapshotOf());
+      e.resetView();
+      return;
+    }
     useStore.setState({ phase: 'working', status: 'Apro il progetto…', progress: 1 });
     const img = new Image();
     await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = data.photo; });

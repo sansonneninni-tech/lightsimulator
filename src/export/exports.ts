@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { jsPDF } from 'jspdf';
 import type { SceneSnapshot } from '../store';
-import type { Reconstruction } from '../engine/reconstruct';
+import { furnitureKind } from '../engine/furniture';
 import {
   LightState, fixtureById, effectiveLumens, lightColor, spotAngles, gelById, diffusionById, effectiveKelvin,
   illuminanceAt, SENSORS, fmtShutter, fmtStop, ASPECTS,
@@ -13,7 +13,7 @@ import { PROP_KINDS } from '../engine/Engine';
 
 export interface PlanInput {
   scene: SceneSnapshot;
-  recon: Reconstruction;
+  recon: { room: { min: [number, number, number]; max: [number, number, number] }; windows: { center: [number, number, number]; right: [number, number, number]; width: number }[] };
   camera: { position: [number, number, number]; dir: [number, number, number]; hfov: number };
 }
 
@@ -68,6 +68,17 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   const ang = Math.atan2(cd.x, -cd.z) * 180 / Math.PI;
   out += `<g transform="translate(${X(cp[0])},${Z(cp[2])}) rotate(${ang})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="#111"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="#111"/></g>`;
   out += `<text x="${X(cp[0])}" y="${Z(cp[2]) + 32}" text-anchor="middle" font-size="12" fill="#111" font-weight="600">Camera</text>`;
+  // arredi (pianta)
+  for (const f of scene.furniture || []) {
+    const k = furnitureKind(f.kind);
+    if (k.ceiling) continue;
+    const cx = X(f.position[0]), cy = Z(f.position[2]);
+    const w = k.size[0] * s, d = k.size[1] * s;
+    const rug = f.kind === 'tappeto';
+    out += `<rect x="${cx - w / 2}" y="${cy - d / 2}" width="${w}" height="${d}" rx="3" transform="rotate(${-f.rotationY} ${cx} ${cy})" fill="${rug ? 'none' : '#f3f3f1'}" stroke="${rug ? '#ddd' : '#bbb'}" stroke-dasharray="${rug ? '4 3' : ''}"/>`;
+    if (!rug && !k.onTop && Math.min(w, d) > 22) out += `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="10" fill="#999">${esc(k.name)}</text>`;
+  }
+  // porte
   // oggetti
   for (const p of scene.props) {
     const r = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(p.rotationY));
@@ -162,7 +173,7 @@ export function kitRows(scene: SceneSnapshot): KitRow[] {
     return {
       n: i + 1,
       name: L.name,
-      fixture: win ? 'Finestra (luce naturale)' : `${fx.name}${L.origin === 'letta' ? ' (in scena)' : ''}`,
+      fixture: win ? 'Finestra (luce naturale)' : L.attached ? `Pratica: ${fx.name}` : `${fx.name}${L.origin === 'letta' ? ' (in scena)' : ''}`,
       output: win ? `${Math.round(effectiveLumens(L, skyLux)).toLocaleString('it-IT')} lm` : `${fx.watts} W · ${stopsLabel(L.stops)} · ${Math.round(effectiveLumens(L, skyLux)).toLocaleString('it-IT')} lm`,
       color: win ? 'Cielo' : `${effectiveKelvin(L.kelvin, L.gel)} K${fx.kelvinFixed ? '' : ''}`,
       accessories: acc.join(', ') || '—',
@@ -177,7 +188,7 @@ export function kitSummary(scene: SceneSnapshot) {
   const map = new Map<string, number>();
   for (const L of scene.lights) {
     if (L.origin !== 'aggiunta') continue;
-    const name = fixtureById(L.fixtureId).name;
+    const name = L.attached ? `${fixtureById(L.fixtureId).name} (per le pratiche)` : fixtureById(L.fixtureId).name;
     map.set(name, (map.get(name) || 0) + 1);
   }
   for (const p of scene.props) {
@@ -188,7 +199,7 @@ export function kitSummary(scene: SceneSnapshot) {
   for (const L of scene.lights) if (L.gel !== 'none') gels.set(gelById(L.gel).name, (gels.get(gelById(L.gel).name) || 0) + 1);
   for (const L of scene.lights) if (L.diffusion !== 'none') gels.set(diffusionById(L.diffusion).name, (gels.get(diffusionById(L.diffusion).name) || 0) + 1);
   let watts = 0;
-  for (const L of scene.lights) if (L.origin === 'aggiunta') watts += fixtureById(L.fixtureId).watts;
+  for (const L of scene.lights) if (L.origin === 'aggiunta' && L.on) watts += fixtureById(L.fixtureId).watts;
   return { items: [...map.entries()], filters: [...gels.entries()], watts };
 }
 

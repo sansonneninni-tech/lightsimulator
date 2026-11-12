@@ -5,6 +5,8 @@ import { eng } from './engineRef';
 import { makeLight, FIXTURES, newId, fixtureById, illuminanceAt } from './engine/photometry';
 import { PersonState, PoseId, poseJoints, POSES } from './engine/mannequin';
 import { PROP_KINDS } from './engine/Engine';
+import { roomBounds } from './engine/room';
+import { removeFurniture, removeOpening } from './build';
 
 export const TYPE_FIXTURE: Record<string, string> = {
   Pannello: 'panel-120x60',
@@ -21,7 +23,9 @@ export const familyType = (fixtureId: string) => {
 export const fixturesOfType = (type: string) => FIXTURES.filter((f) => familyType(f.id) === type);
 
 function room() {
-  const r = useStore.getState().recon;
+  const s = useStore.getState();
+  if (s.room) return roomBounds(s.room);
+  const r = s.recon;
   return r ? r.room : { min: [-3, 0, -5], max: [3, 2.8, 2] };
 }
 
@@ -163,8 +167,11 @@ export function removeSelection() {
   const sel = s.selection;
   if (!sel) return;
   s.snapshot();
+  if (sel.type === 'furniture') { removeFurniture(sel.id); s.showToast('Arredo rimosso. Cmd+Z per riaverlo.'); return; }
+  if (sel.type === 'opening') { removeOpening(sel.id); s.showToast('Apertura rimossa. Cmd+Z per riaverla.'); return; }
   if (sel.type === 'light') {
     const L = s.lights.find((l) => l.id === sel.id);
+    if (L?.attached) { removeFurniture(L.attached); s.showToast('Lampada rimossa. Cmd+Z per riaverla.'); return; }
     useStore.setState({ lights: s.lights.filter((l) => l.id !== sel.id), selection: null });
     s.showToast(`${L?.name || 'Luce'} rimossa. Cmd+Z per riaverla.`);
   } else if (sel.type === 'person') {

@@ -11,11 +11,12 @@ import { WEATHER, fmtHour, sunAngles, sunSky } from '../engine/sun';
 import { LIGHT_TYPES, addLight, addPerson, addProp } from '../actions';
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
+import { autoExpose } from '../build';
 
 const FOCUS_VALUES = [0, 0.5, 0.7, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 1000];
 const fmtFocus = (v: number) => (!v ? 'fuoco auto' : v >= 1000 ? 'fuoco ∞' : `fuoco ${v.toLocaleString('it-IT')} m`);
 
-export type PanelId = 'lights' | 'people' | 'camera' | 'sky' | 'place' | null;
+export type PanelId = 'room' | 'lights' | 'people' | 'camera' | 'sky' | 'place' | null;
 
 function dockAnchor() {
   const d = document.getElementById('dock');
@@ -31,6 +32,7 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
   const a = dockAnchor();
   const skyK = sunSky(sun).skyK;
   const [more, setMore] = useState(false);
+  const hasPhoto = useStore((s) => !!s.recon);
   return (
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={320} onClose={onClose}>
       <h3>Luci</h3>
@@ -39,7 +41,7 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
           <div key={L.id} className="it" onClick={() => { useStore.setState({ selection: { type: 'light', id: L.id } }); onClose(); }}>
             <span className="sw" style={{ background: cssColor(L.origin === 'finestra' ? skyK : L.kelvin, L.gel), opacity: L.on ? 1 : 0.25 }} />
             <span>{L.name}</span>
-            <span className="num">{L.origin === 'finestra' ? 'cielo' : `${stopsLabel(L.stops)} · ${L.kelvin} K`}</span>
+            <span className="num">{L.origin === 'finestra' ? 'cielo' : !L.on ? 'spenta' : `${stopsLabel(L.stops)} · ${L.kelvin} K`}</span>
           </div>
         ))}
         {!lights.length && <div className="hint">Nessuna luce in scena.</div>}
@@ -53,8 +55,8 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
       <div className="types four">
         {PROP_KINDS.map((k) => <button key={k.id} className="type" onClick={() => { addProp(k.id); onClose(); }}><Svg d={TYPE_ICONS[k.name]} />{k.name}</button>)}
       </div>
-      <button className="more" onClick={() => setMore(!more)}>{more ? 'Meno ‹' : 'Più ›'}</button>
-      {more && (
+      {hasPhoto && <button className="more" onClick={() => setMore(!more)}>{more ? 'Meno ‹' : 'Più ›'}</button>}
+      {more && hasPhoto && (
         <div className="row" style={{ marginBottom: 0, marginTop: 10 }}>
           <div className="k"><span>Luce che resta dalla foto</span><b className="num">{Math.round(ambient * 100)}%</b></div>
           <input type="range" min={0} max={1} step={0.01} value={ambient} onPointerDown={() => st().snapshot()} onChange={(e) => useStore.setState({ ambient: +e.target.value })} />
@@ -114,6 +116,7 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
   const meter = useStore((s) => s.meter);
   const a = dockAnchor();
   const set = (p: any) => useStore.setState({ cam: { ...useStore.getState().cam, ...p } });
+  const hasPhoto = useStore((s) => !!s.recon);
   const focals = [...new Set([...FOCALS, Math.round(cam.focal)])].sort((x, y) => x - y);
   return (
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={560} onClose={onClose}>
@@ -133,7 +136,10 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
         <div className="k"><span>Formato</span></div>
         <div className="chips">{ASPECTS.map((m) => <button key={m.id} className={`chip ${cam.aspect === m.id ? 'on' : ''}`} onClick={() => set({ aspect: m.id })}>{m.name}</button>)}</div>
       </div>
-      <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>Torna all'inquadratura della foto</button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
+        <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e && hasPhoto) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>{hasPhoto ? "Torna all'inquadratura della foto" : 'Torna alla vista iniziale'}</button>
+      </div>
       <div className="hint">Muoviti nella stanza: trascina per guardare, rotella per avanzare, W A S D per camminare, Q E per scendere e salire, tasto destro per spostarti di lato.</div>
     </Pop>
   );
@@ -143,7 +149,8 @@ const SEASONS = [{ n: 'Inverno', d: 355 }, { n: 'Primavera', d: 80 }, { n: 'Esta
 
 export function SkyPanel({ onClose }: { onClose: () => void }) {
   const sun = useStore((s) => s.sun);
-  const hasWindows = useStore((s) => !!s.recon?.windows.length);
+  const hasWindows = useStore((s) => (s.room ? s.room.openings.some((o) => o.kind !== 'porta') : !!s.recon?.windows.length));
+  const built = useStore((s) => !!s.room);
   const svg = useRef<SVGSVGElement>(null);
   const set = (p: any) => useStore.setState({ sun: { ...useStore.getState().sun, ...p } });
   // alba e tramonto del giorno scelto
@@ -180,7 +187,7 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
   return (
     <Pop x={el ? el.right : innerWidth - 20} y={el ? el.bottom + 8 : 60} anchor="below" width={300} onClose={onClose}>
       <h3><span>Luce naturale</span><div className={`toggle ${sun.enabled ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ enabled: !sun.enabled }); }} /></h3>
-      {!hasWindows && <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>Non ho trovato finestre nella foto: il sole non entra in questa stanza.</div>}
+      {!hasWindows && <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>{built ? 'La stanza non ha finestre: il sole non entra. Aggiungine una dal pannello Stanza.' : 'Non ho trovato finestre nella foto: il sole non entra in questa stanza.'}</div>}
       <svg ref={svg} viewBox="0 0 260 110" width="100%" style={{ display: 'block', overflow: 'visible', opacity: sun.enabled ? 1 : 0.4 }}>
         <path d="M10 100 A120 90 0 0 1 250 100" fill="none" stroke="rgba(255,255,255,.18)" strokeDasharray="3 4" />
         <line x1="0" y1="100" x2="260" y2="100" stroke="rgba(255,255,255,.12)" />
@@ -212,10 +219,10 @@ export function PlaceMenu({ onClose, onNew, onSave, onOpen }: { onClose: () => v
   return (
     <Pop x={el ? el.left : 20} y={el ? el.bottom + 8 : 60} anchor="at" width={280} onClose={onClose} className="menu">
       <input className="name" value={name} onChange={(e) => useStore.setState({ placeName: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') onClose(); e.stopPropagation(); }} />
-      <button className="mi" onClick={() => { onNew(); onClose(); }}>Nuove foto</button>
+      <button className="mi" onClick={() => { onNew(); onClose(); }}>Nuova stanza</button>
       <button className="mi" onClick={() => { onSave(); onClose(); }}>Salva progetto <small>Cmd S</small></button>
       <button className="mi" onClick={() => { onOpen(); onClose(); }}>Apri progetto</button>
-      <button className="mi" onClick={() => { eng()?.resetView(); onClose(); }}>Torna all'inquadratura della foto</button>
+      <button className="mi" onClick={() => { eng()?.resetView(); onClose(); }}>Torna alla vista iniziale <small>F</small></button>
       {shots.length > 0 && <button className="mi" onClick={() => { useStore.setState({ viewer: shots[shots.length - 1].id }); onClose(); }}>Esporta l'ultimo scatto</button>}
     </Pop>
   );
