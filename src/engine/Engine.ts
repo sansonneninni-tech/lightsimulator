@@ -922,6 +922,7 @@ export class Engine {
       d.position.copy(this.sun.position); d.target.position.copy(this.sun.target.position);
       ptLights.add(d, d.target);
     }
+    const refMean = this.meanRender();
     this.scene.remove(this.rasterLights);
     this.scene.add(ptLights);
     ptLights.updateMatrixWorld(true);
@@ -979,6 +980,7 @@ export class Engine {
     this.pt.reset();
     return new Promise((resolve) => {
       this.shot = { target: samples, start: performance.now(), onProgress, resolve, ptLights };
+      (this.shot as any).refMean = refMean;
       (this.shot as any).prevBg = prevBg;
     });
   }
@@ -998,13 +1000,69 @@ export class Engine {
       const fr = this.frameRect;
       const sx = Math.round(fr.x0 * cv.width), sy = Math.round(fr.y0 * cv.height);
       const sw = Math.round((fr.x1 - fr.x0) * cv.width), shh = Math.round((fr.y1 - fr.y0) * cv.height);
-      const out = document.createElement('canvas');
-      out.width = sw; out.height = shh;
-      out.getContext('2d')!.drawImage(cv, sx, sy, sw, shh, 0, 0, sw, shh);
+      const out = this.captureShot(sx, sy, sw, shh, (sh as any).refMean) || (() => {
+        const o = document.createElement('canvas');
+        o.width = sw; o.height = shh;
+        o.getContext('2d')!.drawImage(cv, sx, sy, sw, shh, 0, 0, sw, shh);
+        return o;
+      })();
       despeckle(out);
       const resolve = sh.resolve;
       this.finishShot(sh.ptLights, (sh as any).prevBg);
       resolve(out);
+    }
+  }
+
+  // luminanza media (lineare, già esposta) dell'anteprima, per allineare lo scatto
+  meanRender(): number {
+    const w = 160, h = Math.max(2, Math.round(160 / this.camera.aspect));
+    const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType });
+    this.renderer.setRenderTarget(rt);
+    this.renderer.render(this.scene, this.camera);
+    const buf = new Float32Array(w * h * 4);
+    this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+    this.renderer.setRenderTarget(null);
+    rt.dispose();
+    return robustMean(buf, w * h);
+  }
+
+  // scatto letto dal buffer in virgola mobile del path tracer, esposto come l'anteprima
+  captureShot(sx: number, sy: number, sw: number, sh: number, refMean: number): HTMLCanvasElement | null {
+    try {
+      const tgt = this.pt.target as THREE.WebGLRenderTarget;
+      const cv = this.renderer.domElement;
+      const W = tgt.width, H = tgt.height;
+      if (!W || !H) return null;
+      const buf = new Float32Array(W * H * 4);
+      this.renderer.readRenderTargetPixels(tgt, 0, 0, W, H, buf);
+      const kx = W / cv.width, ky = H / cv.height;
+      const x0 = Math.round(sx * kx), w = Math.max(1, Math.round(sw * kx));
+      const y0 = Math.round(sy * ky), h = Math.max(1, Math.round(sh * ky));
+      // ritaglio (il buffer è capovolto in verticale)
+      const crop = new Float32Array(w * h * 4);
+      for (let y = 0; y < h; y++) {
+        const srcRow = H - 1 - (y0 + y);
+        crop.set(buf.subarray((srcRow * W + x0) * 4, (srcRow * W + x0 + w) * 4), y * w * 4);
+      }
+      const ptMean = robustMean(crop, w * h);
+      let k = 1;
+      if (refMean > 0 && ptMean > 0) k = Math.min(1.5, Math.max(0.3, refMean / ptMean));
+      (window as any).__shotMatch = { refMean, ptMean, k };
+      const out = document.createElement('canvas');
+      out.width = w; out.height = h;
+      const ctx = out.getContext('2d')!;
+      const img = ctx.createImageData(w, h);
+      const d = img.data;
+      k *= this.exposure;
+      for (let i = 0; i < w * h; i++) {
+        const [r, g, b] = neutralTM(crop[i * 4] * k, crop[i * 4 + 1] * k, crop[i * 4 + 2] * k);
+        d[i * 4] = linToSrgb8(r); d[i * 4 + 1] = linToSrgb8(g); d[i * 4 + 2] = linToSrgb8(b); d[i * 4 + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      return out;
+    } catch (e) {
+      console.warn(e);
+      return null;
     }
   }
 
@@ -1071,6 +1129,36 @@ function averageColor(c: HTMLCanvasElement) {
 }
 
 // ---------------- alette (bandiere) ----------------
+// media robusta della luminanza (senza il 3% più brillante)
+function robustMean(buf: Float32Array, n: number) {
+  const l = new Float32Array(n);
+  for (let i = 0; i < n; i++) l[i] = 0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2];
+  l.sort();
+  const m = Math.floor(n * 0.97);
+  let a = 0;
+  for (let i = 0; i < m; i++) a += l[i];
+  return m ? a / m : 0;
+}
+
+// Khronos PBR Neutral, come nell'anteprima
+function neutralTM(r: number, g: number, b: number): [number, number, number] {
+  const startCompression = 0.8 - 0.04, desaturation = 0.15;
+  const x = Math.min(r, g, b);
+  const offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+  r -= offset; g -= offset; b -= offset;
+  const peak = Math.max(r, g, b);
+  if (peak < startCompression) return [r, g, b];
+  const d = 1 - startCompression;
+  const newPeak = 1 - (d * d) / (peak + d - startCompression);
+  r *= newPeak / peak; g *= newPeak / peak; b *= newPeak / peak;
+  const f = 1 - 1 / (desaturation * (peak - newPeak) + 1);
+  return [r * (1 - f) + newPeak * f, g * (1 - f) + newPeak * f, b * (1 - f) + newPeak * f];
+}
+function linToSrgb8(v: number) {
+  v = Math.min(1, Math.max(0, v));
+  return Math.round((v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055) * 255);
+}
+
 // toglie i puntini isolati (fireflies) rimasti dal path tracing
 function despeckle(cv: HTMLCanvasElement) {
   const ctx = cv.getContext('2d', { willReadFrequently: true })!;
