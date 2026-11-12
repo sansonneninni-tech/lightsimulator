@@ -168,7 +168,14 @@ export async function openProject(file: File) {
 }
 
 export async function loadSample() {
-  const res = await fetch('./esempio.jpg');
-  const blob = await res.blob();
+  let blob: Blob | null = null;
+  try {
+    const res = await fetch('./esempio.jpg');
+    if (res.ok) blob = await res.blob();
+  } catch { blob = null; }
+  if (!blob || !blob.type.startsWith('image/')) {
+    useStore.getState().showToast('La stanza di esempio non è disponibile, trascina una tua foto.');
+    return;
+  }
   await loadPhotos([new File([blob], 'Soggiorno di esempio.jpg', { type: 'image/jpeg' })]);
 }

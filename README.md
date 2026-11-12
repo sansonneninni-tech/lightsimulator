@@ -24,7 +24,7 @@ npm run build    # cartella dist/ statica, pubblicabile ovunque
 
 Tutto gira nel browser: nessun server, nessun costo di calcolo.
 
-- Profondità: Depth Anything V2 Small (ONNX Runtime Web, WebGPU o WASM), scaricato da Hugging Face alla prima foto e poi tenuto in cache. Se esiste `public/models/depth.onnx` viene usato quello. Senza modello l'app ripiega su una stima geometrica della stanza.
+- Profondità: Depth Anything V2 Small (ONNX Runtime Web, WebGPU o WASM), scaricato da Hugging Face alla prima foto e poi tenuto in cache. Se esiste `public/models/depth.onnx` viene usato quello: la versione pubblicata lo include (Depth Anything V2 Small, licenza Apache 2.0, pesi in mezza precisione, 50 MB) e lo tiene in cache dopo la prima foto. Per rigenerarlo: scarica il modello ONNX fp32 e salva i pesi in fp16 con nodi Cast (script in `tools/weights_fp16.py`). Senza modello l'app ripiega su una stima geometrica della stanza.
 - Anteprima: Three.js con luci fotometriche (lumen, candele, lux), ombre, luce indiretta stimata, tone mapping neutro ed esposizione fisica (EV100 da ISO, diaframma, otturatore).
 - Render finale: `three-gpu-pathtracer`.
 
@@ -33,3 +33,12 @@ Tutto gira nel browser: nessun server, nessun costo di calcolo.
 - `src/engine/` fotometria, profondità, ricostruzione, sole, manichino, motore 3D
 - `src/ui/` interfaccia (dock, schede, maniglie, visore)
 - `src/export/` pianta luci, lista materiale, PDF
+
+## Pubblicazione
+
+La versione online è servita da GitHub Pages dal ramo `gh-pages`, che contiene solo la cartella `dist` già costruita (modello compreso):
+
+```
+npm run build
+cd dist && touch .nojekyll && git init -b gh-pages && git add -A && git commit -m "Pubblicazione" && git push -f https://github.com/sansonneninni-tech/lightsimulator gh-pages
+```

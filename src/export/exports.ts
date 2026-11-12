@@ -21,7 +21,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 export function stopsLabel(stops: number) {
   const v = Math.round(stops * 3) / 3;
-  if (Math.abs(v) < 0.01) return 'Pieno';
+  if (Math.abs(v) < 0.01) return '0 stop';
   const w = Math.trunc(v), fr = Math.round(Math.abs(v - w) * 3);
   const sign = v > 0 ? '+' : '−';
   return `${sign}${Math.abs(w) ? Math.abs(w) + (fr ? ' ' : '') : ''}${fr ? fr + '/3' : ''} stop`;

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
 import Pop from './Pop';
+import { edgePoint } from './Handles';
 import { Svg, TYPE_ICONS, POSE_ICONS } from './icons';
 import {
   fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter,
@@ -20,8 +21,8 @@ function useAnchor(pos: [number, number, number] | undefined, key: string) {
   useEffect(() => {
     const e = eng();
     if (!e || !pos) return;
-    const p = e.project(pos);
-    setXy({ x: p.behind ? innerWidth / 2 : p.x, y: p.behind ? innerHeight / 3 : p.y });
+    const p = edgePoint(pos);
+    setXy({ x: p.x, y: p.y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return xy;

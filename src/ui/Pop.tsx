@@ -6,6 +6,12 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
 }) {
   const el = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; ox: number; oy: number } | null>(null);
+  const [hgt, setHgt] = useState(0);
+  useLayoutEffect(() => {
+    const ro = new ResizeObserver(() => setHgt(el.current ? el.current.offsetHeight : 0));
+    ro.observe(el.current!);
+    return () => ro.disconnect();
+  }, []);
   useLayoutEffect(() => {
     const r = el.current!.getBoundingClientRect();
     const W = innerWidth, H = innerHeight;
@@ -24,7 +30,7 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     if (bottom != null) { setPos({ left, bottom, ox: x - left, oy: r.height }); return; }
     top = Math.max(16, Math.min(H - r.height - 96, top));
     setPos({ left, top, ox: x - left, oy: y - top });
-  }, [x, y, width, anchor, bottom]);
+  }, [x, y, width, anchor, bottom, hgt]);
   return (
     <div ref={el} className={`pop glass ${className}`} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
       style={{ width, left: pos?.left ?? -9999, top: pos?.top, bottom: pos?.bottom, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>

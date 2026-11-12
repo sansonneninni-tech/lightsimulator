@@ -339,9 +339,14 @@ function detectLights(photo: HTMLCanvasElement, g: DetCtx) {
     const dr = median([ring(u1 + m, cv), ring(u1 + m, v0), ring(u1 + m, v1)]);
     const dt = median([ring(cu, v0 - m), ring(u0, v0 - m), ring(u1, v0 - m)]);
     const db = median([ring(cu, v1 + m), ring(u0, v1 + m), ring(u1, v1 + m)]);
-    const dAvg = median([dl, dr, dt, db]);
-    const tl = unproject(u0, v0, (dl + dt) / 2 || dAvg), tr = unproject(u1, v0, (dr + dt) / 2 || dAvg);
-    const bl = unproject(u0, v1, (dl + db) / 2 || dAvg), br = unproject(u1, v1, (dr + db) / 2 || dAvg);
+    // un lato che tocca il bordo della foto non vede il muro: si usa la media degli altri
+    const edge = [u0 < 0.015, u1 > 0.985, v0 < 0.015, v1 > 0.985];
+    const vals = [dl, dr, dt, db];
+    const good = vals.filter((_, i) => !edge[i]);
+    const dAvg = median(good.length ? good : vals);
+    const [dl2, dr2, dt2, db2] = vals.map((v, i) => (edge[i] ? dAvg : v));
+    const tl = unproject(u0, v0, (dl2 + dt2) / 2 || dAvg), tr = unproject(u1, v0, (dr2 + dt2) / 2 || dAvg);
+    const bl = unproject(u0, v1, (dl2 + db2) / 2 || dAvg), br = unproject(u1, v1, (dr2 + db2) / 2 || dAvg);
     const center = tl.clone().add(tr).add(bl).add(br).multiplyScalar(0.25);
     const right = tr.clone().sub(tl).add(br.clone().sub(bl)).multiplyScalar(0.5);
     const up = tl.clone().sub(bl).add(tr.clone().sub(br)).multiplyScalar(0.5);

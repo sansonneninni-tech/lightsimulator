@@ -1,5 +1,5 @@
 // Pannelli del dock (Luci, Persone, Camera), luce naturale in alto a destra, menu del luogo in alto a sinistra.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
 import Pop from './Pop';
@@ -27,6 +27,7 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
   const st = useStore.getState;
   const a = dockAnchor();
   const skyK = sunSky(sun).skyK;
+  const [more, setMore] = useState(false);
   return (
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={320} onClose={onClose}>
       <h3>Luci</h3>
@@ -49,12 +50,14 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
       <div className="types four">
         {PROP_KINDS.map((k) => <button key={k.id} className="type" onClick={() => { addProp(k.id); onClose(); }}><Svg d={TYPE_ICONS[k.name]} />{k.name}</button>)}
       </div>
-      <div className="hr" />
-      <div className="row" style={{ marginBottom: 0 }}>
-        <div className="k"><span>Luce che resta dalla foto</span><b className="num">{Math.round(ambient * 100)}%</b></div>
-        <input type="range" min={0} max={1} step={0.01} value={ambient} onPointerDown={() => st().snapshot()} onChange={(e) => useStore.setState({ ambient: +e.target.value })} />
-        <div className="hint">La parte di luce già presente nella foto che non viene da una sorgente trovata. A zero, la stanza è illuminata solo dalle tue luci.</div>
-      </div>
+      <button className="more" onClick={() => setMore(!more)}>{more ? 'Meno ‹' : 'Più ›'}</button>
+      {more && (
+        <div className="row" style={{ marginBottom: 0, marginTop: 10 }}>
+          <div className="k"><span>Luce che resta dalla foto</span><b className="num">{Math.round(ambient * 100)}%</b></div>
+          <input type="range" min={0} max={1} step={0.01} value={ambient} onPointerDown={() => st().snapshot()} onChange={(e) => useStore.setState({ ambient: +e.target.value })} />
+          <div className="hint">Luce della foto non attribuita a una sorgente.</div>
+        </div>
+      )}
     </Pop>
   );
 }

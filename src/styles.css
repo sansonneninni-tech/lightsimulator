@@ -171,3 +171,9 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 #legend i{display:inline-block;width:18px;height:10px;border-radius:2px}
 #help{position:fixed;left:24px;bottom:24px;color:var(--t3);font-size:11px;line-height:1.7;z-index:5;pointer-events:none}
 @media (max-width:760px){#help{display:none}.dbtn span.t{display:none}#roll{display:none}}
+.edge{position:absolute;left:0;top:0;width:28px;height:28px;margin:-14px 0 0 -14px;pointer-events:auto;cursor:pointer;transition:opacity .3s}
+.edge b{position:absolute;left:9px;top:9px;width:10px;height:10px;border-radius:50%;background:currentColor;box-shadow:0 0 10px 1px currentColor}
+.edge i{position:absolute;inset:0}
+.edge i::after{content:'';position:absolute;right:-2px;top:10px;border:4px solid transparent;border-left:6px solid rgba(255,255,255,.75)}
+.edge.sel b{outline:1px solid #fff;outline-offset:3px}
+.idle .edge{opacity:.45}

@@ -104,6 +104,8 @@ export class Engine {
   onFrame: (() => void) | null = null;
   keys = new Set<string>();
   yaw = 0; pitch = 0;
+  albedoMean = 0.5;
+  shotRestore: (() => void) | null = null;
   homePose: { pos: THREE.Vector3; quat: THREE.Quaternion; fov: number } | null = null;
   pt: any = null;
   shot: { target: number; start: number; onProgress: (p: number) => void; resolve: (c: HTMLCanvasElement | null) => void; ptLights: THREE.Group } | null = null;
@@ -240,6 +242,7 @@ export class Engine {
       roughness: 0.82, metalness: 0, side: THREE.DoubleSide,
     });
     this.material = mat;
+    this.albedoMean = meanLinear(recon.albedo);
     // materiale sfocato per le parti della stanza che la foto non vede
     this.blurAlbedo = blurCanvas(recon.albedo, 48);
     const blurAlbedoTex = new THREE.CanvasTexture(this.blurAlbedo);
@@ -948,12 +951,26 @@ export class Engine {
     this.pt.bounces = 5;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
     this.renderer.toneMappingExposure = this.exposure;
+    // la luce che resta dalla foto contiene già i suoi rimbalzi: nel path tracer
+    // non deve rimbalzare di nuovo. Albedo contenuta e emissione ridotta di (1 - albedo).
+    const cScale = Math.min(1, 0.55 / Math.max(0.05, this.albedoMean));
+    const rho = Math.min(0.9, this.albedoMean * cScale);
+    const emScale = Math.max(0.15, 1 - rho * 0.9);
+    const saved: [THREE.MeshStandardMaterial, THREE.Color, number][] = [];
+    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat].filter(Boolean) as THREE.MeshStandardMaterial[];
+    for (const m of roomMats) {
+      saved.push([m, m.color.clone(), m.emissiveIntensity]);
+      m.color.multiplyScalar(cScale);
+      m.emissiveIntensity *= emScale;
+    }
+    this.shotRestore = () => { for (const [m, c, ei] of saved) { m.color.copy(c); m.emissiveIntensity = ei; } };
     const prevBg = this.scene.background;
     this.scene.background = new THREE.Color(0, 0, 0);
     this.scene.environment = null;
     this.ambient.visible = false;
     try {
-      await this.pt.setSceneAsync(this.scene, this.camera);
+      await new Promise((r) => setTimeout(r, 30));
+      this.pt.setScene(this.scene, this.camera);
     } catch (e) {
       console.error(e);
       this.finishShot(ptLights, prevBg);
@@ -971,7 +988,9 @@ export class Engine {
     this.pt.renderSample();
     const smp = this.pt.samples;
     const elapsed = (performance.now() - sh.start) / 1000;
-    const p = Math.min(1, Math.max(smp / sh.target, elapsed / 120));
+    const cap = Number(new URLSearchParams(location.search).get("cap")) || 120;
+    const p = Math.min(1, Math.max(smp / sh.target, elapsed / cap));
+    (window as any).__ptSamples = smp;
     sh.onProgress(p);
     if (p >= 1) {
       // cattura immediata dal canvas (stesso frame)
@@ -982,6 +1001,7 @@ export class Engine {
       const out = document.createElement('canvas');
       out.width = sw; out.height = shh;
       out.getContext('2d')!.drawImage(cv, sx, sy, sw, shh, 0, 0, sw, shh);
+      despeckle(out);
       const resolve = sh.resolve;
       this.finishShot(sh.ptLights, (sh as any).prevBg);
       resolve(out);
@@ -996,6 +1016,7 @@ export class Engine {
   }
 
   finishShot(ptLights: THREE.Group, prevBg: any) {
+    this.shotRestore?.(); this.shotRestore = null;
     this.scene.remove(ptLights);
     ptLights.traverse((o: any) => o.dispose?.());
     this.scene.add(this.rasterLights);
@@ -1050,6 +1071,44 @@ function averageColor(c: HTMLCanvasElement) {
 }
 
 // ---------------- alette (bandiere) ----------------
+// toglie i puntini isolati (fireflies) rimasti dal path tracing
+function despeckle(cv: HTMLCanvasElement) {
+  const ctx = cv.getContext('2d', { willReadFrequently: true })!;
+  const W = cv.width, H = cv.height;
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data, src = new Uint8ClampedArray(d);
+  const lum = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) lum[i] = 0.2126 * src[i * 4] + 0.7152 * src[i * 4 + 1] + 0.0722 * src[i * 4 + 2];
+  const nb = new Float32Array(8);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) nb[n++] = lum[i + dy * W + dx];
+    const sorted = Array.from(nb).sort((a, b) => a - b);
+    const med = (sorted[3] + sorted[4]) / 2;
+    if (lum[i] > med + 28 && lum[i] > sorted[6] + 12) {
+      for (let c = 0; c < 3; c++) {
+        let acc = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) acc += src[(i + dy * W + dx) * 4 + c];
+        d[i * 4 + c] = acc / 8;
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// luminanza lineare media di una tela (miniatura)
+function meanLinear(cv: HTMLCanvasElement) {
+  const c = document.createElement('canvas'); c.width = 32; c.height = 24;
+  const x = c.getContext('2d', { willReadFrequently: true })!;
+  x.drawImage(cv, 0, 0, 32, 24);
+  const d = x.getImageData(0, 0, 32, 24).data;
+  const lin = (v: number) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  let m = 0;
+  for (let i = 0; i < 32 * 24; i++) m += 0.2126 * lin(d[i * 4]) + 0.7152 * lin(d[i * 4 + 1]) + 0.0722 * lin(d[i * 4 + 2]);
+  return m / (32 * 24);
+}
+
 const doorMat = new THREE.MeshStandardMaterial({ color: 0x0b0b0b, roughness: 0.6, metalness: 0.2, side: THREE.DoubleSide });
 function makeDoors() {
   const g = new THREE.Group();

@@ -17,6 +17,30 @@ export const cssColor = (kelvin: number, gel: string) => {
   return `rgb(${Math.round((Math.pow(c.r / m, 1 / 2.2)) * 255)},${Math.round(Math.pow(c.g / m, 1 / 2.2) * 255)},${Math.round(Math.pow(c.b / m, 1 / 2.2) * 255)})`;
 };
 
+// punto sul bordo dello schermo nella direzione di p (per ciò che sta fuori inquadratura)
+export function edgePoint(p: THREE.Vector3 | [number, number, number], margin = 30) {
+  const e = eng()!;
+  const W = e.container.clientWidth, H = e.container.clientHeight;
+  const pr = e.project(p);
+  const inside = !pr.behind && pr.x >= 0 && pr.y >= 0 && pr.x <= W && pr.y <= H;
+  const v = (Array.isArray(p) ? new THREE.Vector3(...p) : p.clone()).applyMatrix4(e.camera.matrixWorldInverse);
+  let dx = v.x, dy = -v.y;
+  if (Math.hypot(dx, dy) < 1e-4) dy = 1;
+  const cx = W / 2, cy = H / 2;
+  const k = Math.min((cx - margin) / Math.max(1e-6, Math.abs(dx)), (cy - margin) / Math.max(1e-6, Math.abs(dy)));
+  return { inside, x: inside ? pr.x : cx + dx * k, y: inside ? pr.y : cy + dy * k, angle: Math.atan2(dy, dx) };
+}
+
+export function lookToward(p: [number, number, number]) {
+  const e = eng();
+  if (!e) return;
+  const d = new THREE.Vector3(...p).sub(e.camera.position);
+  e.yaw = Math.atan2(-d.x, -d.z);
+  e.pitch = Math.atan2(d.y, Math.hypot(d.x, d.z)) * 0.6;
+  e.applyLook();
+  e.dirty = true;
+}
+
 type DragSt = { x: number; y: number; moved: boolean; [k: string]: any };
 function drag(el: HTMLElement, onMove: (e: PointerEvent, st: DragSt) => void, onStart?: (e: PointerEvent, st: DragSt) => void, onEnd?: (e: PointerEvent, st: DragSt) => void) {
   const down = (e: PointerEvent) => {
@@ -64,7 +88,16 @@ export default function Handles() {
         el.style.transform = `translate(${pr.x}px,${pr.y}px)`;
         return pr;
       };
-      for (const L of s.lights) put('l' + L.id, L.position);
+      for (const L of s.lights) {
+        put('l' + L.id, L.position);
+        const ed = els.current.get('e' + L.id);
+        if (ed) {
+          const q = edgePoint(L.position);
+          ed.style.display = q.inside ? 'none' : '';
+          ed.style.transform = `translate(${q.x}px,${q.y}px)`;
+          (ed.firstElementChild as HTMLElement).style.transform = `rotate(${q.angle}rad)`;
+        }
+      }
       for (const P of s.people) put('p' + P.id, P.position);
       for (const O of s.props) put('o' + O.id, O.position);
       const sel = s.selection;
@@ -98,6 +131,15 @@ export default function Handles() {
         <LightHandle key={L.id} id={L.id} reg={reg('l' + L.id)} color={cssColor(L.origin === 'finestra' ? skyK : L.kelvin, L.gel)}
           on={L.on} sel={selection?.type === 'light' && selection.id === L.id} label={`${L.name} · ${L.origin === 'finestra' ? (sun.enabled ? 'cielo' : 'spenta') : stopsLabel(L.stops)}`}
           appear={(L as any)._new} win={L.origin === 'finestra'} />
+      ))}
+      {lights.map((L) => (
+        <div key={'e' + L.id} ref={reg('e' + L.id)} className={`edge${selection?.type === 'light' && selection.id === L.id ? ' sel' : ''}`} title={L.name}
+          style={{ color: cssColor(L.origin === 'finestra' ? skyK : L.kelvin, L.gel), opacity: L.on ? 1 : 0.4 }}
+          onPointerDown={(ev) => ev.stopPropagation()}
+          onClick={() => useStore.setState({ selection: { type: 'light', id: L.id } })}
+          onDoubleClick={(ev) => { ev.stopPropagation(); lookToward(L.position); }}>
+          <i /><b />
+        </div>
       ))}
       {people.map((P) => (
         <PersonHandle key={P.id} id={P.id} reg={reg('p' + P.id)} sel={selection?.type === 'person' && selection.id === P.id} label={POSES.find((q) => q.id === P.pose)?.name || ''} />
