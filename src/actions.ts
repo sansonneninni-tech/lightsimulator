@@ -163,11 +163,31 @@ export function addProp(kind: PropState['kind']) {
   const camPos = e ? e.camera.position.clone() : new THREE.Vector3(0, 1.6, 0);
   const toCam = camPos.clone().sub(subject); toCam.y = 0; toCam.normalize();
   const side = toCam.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(kind === 'bianco' ? -70 : 60));
-  const pos = subject.clone().addScaledVector(side, 1.2);
+  let pos = subject.clone().addScaledVector(side, 1.2);
   pos.y = kind === 'diffusore' ? 2.0 : 1.3;
   clampToRoom(pos, 0.3);
-  const face = subject.clone().sub(pos); face.y = 0;
+  let face = subject.clone().sub(pos); face.y = 0;
   const k = PROP_KINDS.find((p) => p.id === kind)!;
+  // la bandiera nasce davanti a una luce (quella scelta o la più forte) e ne taglia metà fascio;
+  // il telaio di diffusione nasce davanti alla luce e la copre tutta
+  if (kind === 'bandiera' || kind === 'diffusore') {
+    const selL = s.selection?.type === 'light' ? s.lights.find((l) => l.id === s.selection!.id) : null;
+    const cands = s.lights.filter((l) => l.on && l.origin !== 'finestra' && !l.attached);
+    const L = selL && selL.origin !== 'finestra' && !selL.attached ? selL : cands.sort((a, b) => b.stops - a.stops)[0];
+    if (L) {
+      const lp = new THREE.Vector3(...L.position), lt = new THREE.Vector3(...L.target);
+      const dir = lt.clone().sub(lp).normalize();
+      const d = Math.min(kind === 'bandiera' ? 0.9 : 1.1, lp.distanceTo(lt) * 0.4);
+      pos = lp.clone().addScaledVector(dir, d);
+      if (kind === 'bandiera') {
+        const perp = new THREE.Vector3(-dir.z, 0, dir.x);
+        if (perp.lengthSq() < 1e-4) perp.set(1, 0, 0);
+        pos.addScaledVector(perp.normalize(), k.size[0] / 2);
+      }
+      face = dir.clone().negate(); face.y = 0;
+      if (face.lengthSq() < 1e-4) face.set(0, 0, 1);
+    }
+  }
   const P: PropState = {
     id: newId('o'), kind, position: pos.toArray() as any, rotationY: THREE.MathUtils.radToDeg(Math.atan2(face.x, face.z)),
     tilt: kind === 'diffusore' ? -30 : 0, size: [...k.size] as [number, number],

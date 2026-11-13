@@ -78,9 +78,11 @@ void main(){
   gl_FragColor = vec4(c * max(texture2D(tAlb, vUv).rgb, vec3(0.03)) + e, 1.0);
 }`;
 
-export function denoise(renderer: THREE.WebGLRenderer, pt: THREE.Texture, alb: THREE.Texture, nrm: THREE.Texture, dist: THREE.Texture, W: number, H: number, emit: THREE.Texture) {
+export function denoise(renderer: THREE.WebGLRenderer, pt: THREE.Texture, alb: THREE.Texture, nrm: THREE.Texture, dist: THREE.Texture, W: number, H: number, emit: THREE.Texture, samples = 1000) {
   const mk = () => new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, colorSpace: THREE.LinearSRGBColorSpace });
   const A = mk(), B = mk();
+  // il risultato si ingrandisce alla risoluzione dello schermo: filtro lineare
+  if (renderer.extensions.has('OES_texture_float_linear')) for (const t of [A, B]) { t.texture.magFilter = THREE.LinearFilter; t.texture.minFilter = THREE.LinearFilter; }
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
   quad.frustumCulled = false;
   const scene = new THREE.Scene(); scene.add(quad);
@@ -95,9 +97,12 @@ export function denoise(renderer: THREE.WebGLRenderer, pt: THREE.Texture, alb: T
   };
   run(DEMOD, { tPT: { value: pt }, tAlb: { value: alb }, tDist: { value: dist }, texel: { value: texel } }, A);
   let src = A, dst = B;
-  const steps = [1, 2, 4, 8, 16];
+  // con pochi passaggi (schede video lente) il rumore è più forte: filtro più largo e più tollerante
+  const few = samples < 150;
+  const steps = few ? [1, 2, 4, 8, 16, 32, 64] : [1, 2, 4, 8, 16];
+  const sigL = few ? 4 + 8 * (1 - samples / 150) : 4;
   for (let i = 0; i < steps.length; i++) {
-    run(ATROUS, { tIn: { value: src.texture }, tNrm: { value: nrm }, tDist: { value: dist }, texel: { value: texel }, stepW: { value: steps[i] }, sigL: { value: 4 } }, dst);
+    run(ATROUS, { tIn: { value: src.texture }, tNrm: { value: nrm }, tDist: { value: dist }, texel: { value: texel }, stepW: { value: steps[i] }, sigL: { value: sigL } }, dst);
     [src, dst] = [dst, src];
   }
   run(REMOD, { tIn: { value: src.texture }, tAlb: { value: alb }, tDist: { value: dist }, tEmit: { value: emit } }, dst);

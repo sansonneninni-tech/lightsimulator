@@ -213,7 +213,12 @@ export function PropCard({ id }: { id: string }) {
         <div className="k"><span>Inclinazione</span><b className="num">{Math.round(O.tilt)}°</b></div>
         <input type="range" min={-90} max={90} step={1} value={O.tilt} onPointerDown={snap} onChange={(e) => up({ tilt: +e.target.value })} />
       </div>
-      <div className="hint">Trascina il quadratino per spostarlo (Alt per l'altezza), rotella per girarlo.</div>
+      <div className="hint">{({
+        bandiera: 'Bandiera: taglia la luce. Mettila davanti a una lampada per togliere luce dove non la vuoi (ombra netta vicino al soggetto, morbida vicino alla lampada).',
+        nero: 'Pannello nero: toglie il riempimento. Dal suo lato la stanza rimbalza meno luce, il lato in ombra del soggetto si scurisce.',
+        bianco: 'Pannello bianco: rimbalza la luce che lo colpisce. Giralo verso la lampada e verso il soggetto per schiarire le ombre.',
+        diffusore: 'Telaio di diffusione: mettilo davanti a una lampada, la luce diventa grande e morbida.',
+      } as Record<string, string>)[O.kind]} Trascina il quadratino per spostarlo (Alt per l'altezza), rotella per girarlo.</div>
       <div className="hr" /><button className="more danger" onClick={removeSelection}>Rimuovi</button>
     </Pop>
   );

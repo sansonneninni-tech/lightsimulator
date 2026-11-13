@@ -744,6 +744,7 @@ export class Engine {
     if (!prev || prev.lights !== s.lights) this.updateGlow();
     if (!prev || prev.lights !== s.lights || prev.ambient !== s.ambient || prev.sun !== s.sun) this.updateEmissive();
     this.updateIndirect();
+    this.syncPropLights();
     this.quadMat.uniforms.falseColor.value = s.cam.falseColor ? 1 : 0;
     this.dirty = true;
   }
@@ -804,6 +805,54 @@ export class Engine {
     const props = this.snapshot?.props || [];
     if (!props.some((p) => p.kind === 'diffusore')) return lights;
     return lights.map((L) => this.diffused(L, props) || L);
+  }
+
+  // anteprima: il pannello bianco rimbalza la luce che lo colpisce, il pannello nero toglie il
+  // riempimento della stanza dal suo lato (nello scatto lo fa da solo il path tracing)
+  propLights = new Map<string, THREE.SpotLight>();
+  syncPropLights() {
+    const want = new Set<string>();
+    const s = this.snapshot;
+    if (s) for (const p of s.props) {
+      if (p.kind !== 'bianco' && p.kind !== 'nero') continue;
+      const rot = new THREE.Euler(THREE.MathUtils.degToRad(p.tilt), THREE.MathUtils.degToRad(p.rotationY), 0, 'YXZ');
+      const n = new THREE.Vector3(0, 0, 1).applyEuler(rot);
+      const c = new THREE.Vector3(...p.position);
+      const A = p.size[0] * p.size[1];
+      for (const side of [1, -1]) {
+        const nn = n.clone().multiplyScalar(side);
+        let I = 0;
+        if (p.kind === 'bianco') {
+          // luce che arriva su questa faccia (senza il riempimento stimato), riflessa all'85%
+          const r = this.readingAt(c.clone().addScaledVector(nn, 0.02), nn);
+          const E = r ? Math.max(0, r.lux - this.ambient.intensity) : 0;
+          I = (0.85 * E * A) / Math.PI;
+        } else {
+          // superficie nera: dal suo lato manca la luce che la stanza rimbalzerebbe
+          I = -(this.ambient.intensity / Math.PI) * A * 0.9;
+        }
+        if (Math.abs(I) < 1e-3) continue;
+        const key = `${p.id}:${side}`;
+        want.add(key);
+        let l = this.propLights.get(key);
+        if (!l) {
+          l = new THREE.SpotLight();
+          l.angle = THREE.MathUtils.degToRad(84); l.penumbra = 1; l.decay = 2; l.distance = 0;
+          l.castShadow = true;
+          l.shadow.mapSize.set(512, 512); l.shadow.bias = -0.0006; l.shadow.normalBias = 0.02;
+          l.shadow.camera.near = 0.08; l.shadow.radius = 6; (l.shadow.camera as THREE.PerspectiveCamera).fov = 170;
+          this.rasterLights.add(l, l.target);
+          this.propLights.set(key, l);
+        }
+        l.color.setRGB(1, 1, 1);
+        l.intensity = I;
+        l.position.copy(c).addScaledVector(nn, 0.04);
+        l.target.position.copy(c).addScaledVector(nn, 2);
+        l.target.updateMatrixWorld();
+      }
+    }
+    for (const [k, l] of this.propLights) if (!want.has(k)) { this.rasterLights.remove(l, l.target); l.shadow.map?.dispose(); l.dispose(); this.propLights.delete(k); }
+    this.dirty = true;
   }
 
   // il telo del telaio si illumina (solo in anteprima: nello scatto la luce è la sorgente stessa)
@@ -1633,7 +1682,7 @@ export class Engine {
   // la stessa esposizione e lo stesso bilanciamento dell'anteprima, solo più pulito.
   async shoot(onProgress: (p: number) => void, samples = 384): Promise<HTMLCanvasElement | null> {
     if (this.shot || !this.snapshot) return null;
-    if (this.built) return this.shootBuilt(onProgress, Math.max(samples, 1200));
+    if (this.built) return this.shootBuilt(onProgress, 600);
     const s = this.snapshot;
     const added = s.lights.filter((L) => L.on && L.origin === 'aggiunta' && effectiveLumens(L, 0) > 0);
     if (!added.length) {
@@ -1674,7 +1723,7 @@ export class Engine {
     this.scene.add(ptLights);
     ptLights.updateMatrixWorld(true);
     this.initPT();
-    this.pt.bounces = 6;
+    this.pt.bounces = 4;
     // le lampadine stanno dentro la loro luce: nel path tracing la nasconderebbero
     const hidden: THREE.Object3D[] = [];
     for (const o of this.furn.values()) o.obj.traverse((m: any) => { if (m.userData.bulb && m.visible) { m.visible = false; hidden.push(m); } });
@@ -1727,6 +1776,13 @@ export class Engine {
       this.pt.rasterizeScene = false;
     }
     this.pt.multipleImportanceSampling = true;
+    // leggero per la scheda video: al massimo ~0,9 megapixel calcolati (il resto lo fa il filtro
+    // del rumore e l'ingrandimento), a pezzetti piccoli così il computer resta reattivo
+    const W = this.rt.width, H = this.rt.height;
+    this.pt.renderScale = Math.min(1, Math.sqrt(900000 / Math.max(1, W * H)));
+    const px = W * H * this.pt.renderScale * this.pt.renderScale;
+    const t = px > 500000 ? 4 : px > 200000 ? 3 : 2;
+    this.pt.tiles.set(t, t);
     this.renderer.toneMapping = THREE.NoToneMapping;
   }
 
@@ -1795,7 +1851,7 @@ export class Engine {
     this.pt.renderSample();
     const smp = this.pt.samples;
     const elapsed = (performance.now() - sh.start) / 1000;
-    const cap = Number(new URLSearchParams(location.search).get('cap')) || (this.built ? 90 : 120);
+    const cap = Number(new URLSearchParams(location.search).get('cap')) || (this.built ? 45 : 120);
     const p = Math.min(1, Math.max(smp / sh.target, elapsed / cap));
     (window as any).__ptSamples = smp;
     sh.onProgress(Math.min(0.99, p));
@@ -1865,7 +1921,7 @@ export class Engine {
       nm.dispose();
       this.scene.overrideMaterial = prevOv; this.scene.background = prevBg; this.scene.environment = prevEnv;
       this.renderer.setClearColor(prevClear, prevAlpha);
-      const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H, emit.texture);
+      const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H, emit.texture, this.pt.samples);
       alb.dispose(); nrm.dispose(); dist.dispose(); emit.dispose();
       this.tmpRT = out;
       return out.texture;
