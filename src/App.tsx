@@ -1,3 +1,4 @@
+import { poseJoints } from './engine/mannequin';
 import { useEffect, useRef, useState } from 'react';
 import { useStore, Shot } from './store';
 import { Engine } from './engine/Engine';
@@ -46,6 +47,7 @@ export default function App() {
     ref.engine = e;
     (window as any).__engine = e;
     (window as any).__store = useStore;
+    (window as any).__actions = { addLight, poseJoints, closeAll: () => { const r = useStore.getState().room; r?.openings.forEach((o) => { if (o.kind !== 'porta') updateOpening(o.id, { closed: true }); }); } };
     const unsub = useStore.subscribe((s, p) => {
       if (s.lights !== p.lights || s.people !== p.people || s.props !== p.props || s.sun !== p.sun || s.cam !== p.cam || s.ambient !== p.ambient || s.room !== p.room || s.furniture !== p.furniture) e.apply(snapshotOf());
       if (s.selection !== p.selection || s.furniture !== p.furniture) e.setSelected(s.selection?.type === 'furniture' || s.selection?.type === 'opening' ? s.selection.id : null);

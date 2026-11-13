@@ -166,6 +166,10 @@ export function PersonCard({ id }: { id: string }) {
         {POSES.map((q) => <button key={q.id} className={`pose ${P.pose === q.id ? 'on' : ''}`} onClick={() => { snap(); up({ pose: q.id as PoseId, joints: poseJoints(q.id as PoseId) }); }}><Svg d={POSE_ICONS[q.id]} vb="0 0 28 36" />{q.name}</button>)}
       </div>
       <div className="row">
+        <div className="k"><span>Persona</span></div>
+        <div className="chips">{(['uomo', 'donna'] as const).map((f) => <button key={f} className={`chip ${(P.figure || 'uomo') === f ? 'on' : ''}`} onClick={() => { snap(); up({ figure: f }); }}>{f === 'uomo' ? 'Uomo' : 'Donna'}</button>)}</div>
+      </div>
+      <div className="row">
         <div className="k"><span>Pelle</span></div>
         <div className="chips">{SKINS.map((s) => <button key={s.id} className={`chip ${P.skin === s.id ? 'on' : ''}`} onClick={() => { snap(); up({ skin: s.id }); }}>{s.name}</button>)}</div>
       </div>

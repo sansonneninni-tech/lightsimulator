@@ -16,6 +16,7 @@ import { RoomSpec, WallId, wallFrame, buildRoom, roomBounds, windowInfos, skyTex
 import { FurnitureState, buildFurniture } from './furniture';
 import { denoise } from './denoise';
 import { Rigs } from './rigs';
+import { loadFigure, poseFigure, figureModel } from './figure';
 
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
@@ -1003,6 +1004,7 @@ export class Engine {
   }
 
   syncPeople(list: PersonState[]) {
+    this.lastPeople = list;
     const ids = new Set(list.map((p) => p.id));
     for (const [id, o] of this.people) if (!ids.has(id)) { this.scene.remove(o.obj); this.people.delete(id); }
     for (const p of list) {
@@ -1020,8 +1022,18 @@ export class Engine {
       // i piedi poggiano sul pavimento letto dalla foto (che può non stare esattamente a quota 0)
       const obj = this.people.get(p.id)!.obj;
       obj.position.y = p.position[1] + this.groundAt(p.position[0], p.position[2]);
+      if (!poseFigure(obj, p)) {
+        // la figura arriva poco dopo: intanto si vede il manichino
+        const model = figureModel(p);
+        if (!this.figureWait.has(model)) {
+          this.figureWait.add(model);
+          loadFigure(model).then((t) => { if (t && !this.disposed) { this.syncPeople(this.lastPeople); this.dirty = true; } });
+        }
+      }
     }
   }
+  lastPeople: PersonState[] = [];
+  figureWait = new Set<string>();
 
   groundAt(x: number, z: number) {
     if (this.built) return 0;
@@ -1180,6 +1192,30 @@ export class Engine {
     return { iso: isoSnap, fStop, shutter };
   }
 
+  // luce sul volto della persona più vicina al centro dell'inquadratura (lato più illuminato verso la camera)
+  faceLux() {
+    let best = 0, bestD = Infinity;
+    const W = this.container.clientWidth, H = this.container.clientHeight;
+    for (const o of this.people.values()) {
+      const j = (o.obj.userData.joints as Record<string, THREE.Object3D>)?.head;
+      if (!j) continue;
+      const c = j.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.08, 0));
+      const pr = this.project(c);
+      if (pr.behind || pr.x < 0 || pr.y < 0 || pr.x > W || pr.y > H) continue;
+      const d = Math.hypot(pr.x - W / 2, pr.y - H / 2);
+      if (d > bestD) continue;
+      const toCam = this.camera.position.clone().sub(c).setY(0).normalize();
+      let lux = 0;
+      for (const a of [-50, -25, 0, 25, 50]) {
+        const n = toCam.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(a));
+        const r = this.readingAt(c.clone().addScaledVector(n, 0.13), n);
+        if (r) lux = Math.max(lux, r.lux);
+      }
+      best = lux; bestD = d;
+    }
+    return best;
+  }
+
   // esposizione automatica per l'interno (le finestre, molto più chiare, non contano)
   autoExposure(): { iso: number; fStop: number; shutter: number } | null {
     if (!this.snapshot) return null;
@@ -1202,6 +1238,9 @@ export class Engine {
     const M = cut.reduce((a, b) => a + b, 0) / Math.max(1, cut.length);
     if (!(M > 1e-7)) return null;
     this.dirty = true;
+    // con una persona in quadro si espone per il volto (cartoncino grigio dal lato della chiave)
+    const face = this.built ? this.faceLux() : 0;
+    if (face > 0.5) return this.settingsFor(1.3 * Math.PI / face);
     return this.settingsFor(0.2 / M);
   }
 
