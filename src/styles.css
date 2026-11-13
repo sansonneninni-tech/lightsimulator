@@ -223,3 +223,11 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
   .joint{width:16px;height:16px;margin:-8px 0 0 -8px}
   .joint::before{content:"";position:absolute;inset:-12px;border-radius:50%}
 }
+
+/* computer: la scheda si sposta trascinandola; la lineetta in alto lo suggerisce */
+.pop:not(.sheet){cursor:grab}
+.pop:not(.sheet):active{cursor:grabbing}
+.pop:not(.sheet) input,.pop:not(.sheet) button,.pop:not(.sheet) .toggle,.pop:not(.sheet) .chip{cursor:pointer}
+.pop .grip{height:10px;margin:-10px -16px 4px;display:flex;justify-content:center;align-items:flex-start;padding-top:2px}
+.pop .grip i{width:32px;height:3px;border-radius:2px;background:rgba(255,255,255,.22);transition:background .2s}
+.pop:hover .grip i{background:rgba(255,255,255,.45)}

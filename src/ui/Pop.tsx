@@ -1,4 +1,4 @@
-import { ReactNode, useLayoutEffect, useRef, useState } from 'react';
+import React, { ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { eng } from '../engineRef';
 
 // Scheda in vetro che compare vicino al punto (x, y), sempre dentro lo schermo.
@@ -27,6 +27,26 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     eng()?.setViewShift((innerHeight - top) / 2);
   }, [phone, pos, hgt, mini]);
   useLayoutEffect(() => () => { if (phone) eng()?.setViewShift(0); }, [phone]);
+  // computer: la scheda si sposta trascinandola (da un punto qualsiasi che non sia un comando)
+  const [pinned, setPinned] = useState<{ left: number; top: number } | null>(null);
+  const dragStart = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (phone || e.button !== 0 || !el.current) return;
+    const t = e.target as HTMLElement;
+    if (t.closest('input,button,select,textarea,a,label,.toggle,.chip,.v,.type,.pose,[data-nodrag]')) return;
+    const r = el.current.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    let moved = false;
+    const mv = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+      moved = true;
+      const left = Math.max(8, Math.min(innerWidth - r.width - 8, r.left + ev.clientX - sx));
+      const top = Math.max(8, Math.min(innerHeight - Math.min(r.height, 120) - 8, r.top + ev.clientY - sy));
+      setPinned({ left, top });
+    };
+    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
+    addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  };
   useLayoutEffect(() => {
     if (phone) return;
     // misure senza la trasformazione dell'animazione di apertura
@@ -49,9 +69,10 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     setPos({ left, top, ox: x - left, oy: y - top });
   }, [x, y, width, anchor, bottom, hgt]);
   return (
-    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && mini ? ' mini' : ''}`} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
-      style={{ width: phone ? innerWidth - 16 : width, left: pos?.left ?? -9999, top: pos?.top, bottom: pos?.bottom, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>
-      {phone && <div className="grab" onClick={() => setMini(!mini)} title={mini ? 'Apri' : 'Riduci'}><i /></div>}
+    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && mini ? ' mini' : ''}`} onPointerDown={dragStart} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
+      style={{ width: phone ? innerWidth - 16 : width, left: pinned ? pinned.left : pos?.left ?? -9999, top: pinned ? pinned.top : pos?.top, bottom: pinned ? undefined : pos?.bottom, animation: pinned ? 'none' : undefined, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>
+      {phone ? <div className="grab" onClick={() => setMini(!mini)} title={mini ? 'Apri' : 'Riduci'}><i /></div>
+        : <div className="grip" title="Trascina per spostare"><i /></div>}
       {children}
     </div>
   );
