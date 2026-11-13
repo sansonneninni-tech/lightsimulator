@@ -1745,7 +1745,16 @@ export class Engine {
     // fotografando da fuori, le pareti tra camera e stanza si tolgono (come le pareti mobili sul set)
     this.camera.updateMatrixWorld();
     this.updateCutaway(true);
-    this.room.traverse((m: any) => { if (m.isMesh && m.userData.cut && this.cutaway.has(m.userData.cut) && m.visible) { m.visible = false; hidden.push(m); } });
+    // ma restano lì per la luce: invisibili solo ai raggi della camera (altrimenti il cielo entra
+    // da dove manca la parete e la stanza chiusa diventa luminosa come fuori)
+    const matte: { m: any; mat: any }[] = [];
+    this.room.traverse((m: any) => {
+      if (!m.isMesh || !m.userData.cut || !this.cutaway.has(m.userData.cut)) return;
+      if (!m.visible) { m.visible = true; m.userData.wasHidden = true; }
+      matte.push({ m, mat: m.material });
+      const c = (Array.isArray(m.material) ? m.material : [m.material]).map((x: any) => { const k = x.clone(); k.matte = true; return k; });
+      m.material = Array.isArray(m.material) ? c : c[0];
+    });
     const selVis = this.selBox.visible;
     this.selBox.visible = false;
     const prevBg = this.scene.background;
@@ -1753,6 +1762,11 @@ export class Engine {
     this.scene.environmentIntensity = 1;
     this.shotRestore = () => {
       for (const m of hidden) m.visible = true;
+      for (const q of matte) {
+        (Array.isArray(q.m.material) ? q.m.material : [q.m.material]).forEach((x: any) => x.dispose());
+        q.m.material = q.mat;
+        if (q.m.userData.wasHidden) { q.m.visible = false; delete q.m.userData.wasHidden; }
+      }
       for (const m of frameMats) m.emissiveIntensity = m.userData.glow || 0;
       for (const q of shades) { q.m.emissiveIntensity = q.m.userData.glowI || 0; q.m.transparent = q.t; q.m.opacity = q.o; }
       this.scene.environment = null;
@@ -1776,6 +1790,14 @@ export class Engine {
       this.pt.rasterizeScene = false;
     }
     this.pt.multipleImportanceSampling = true;
+    // materiale "matte": invisibile alla camera ma solido per la luce (le pareti tolte per guardare dentro)
+    const ptm = (this.pt as any)._pathTracer.material;
+    if (!ptm.userData.mattePatched) {
+      const fs = ptm.fragmentShader.replace(/if \( material\.matte && state\.firstRay \) \{\s*gl_FragColor = vec4\( 0\.0 \);\s*break;\s*\}/,
+        'if ( material.matte && state.firstRay ) { ray.origin = stepRayOrigin( ray.origin, ray.direction, - surfaceHit.faceNormal, surfaceHit.dist ); continue; }');
+      if (fs === ptm.fragmentShader) console.warn('matte patch non applicata');
+      ptm.fragmentShader = fs; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
+    }
     // leggero per la scheda video: al massimo ~0,9 megapixel calcolati (il resto lo fa il filtro
     // del rumore e l'ingrandimento), a pezzetti piccoli così il computer resta reattivo
     const W = this.rt.width, H = this.rt.height;
@@ -1865,6 +1887,7 @@ export class Engine {
 
   // stanza costruita: path tracing ripulito dal rumore con l'aiuto di colore, normali e distanze
   denoisedShot(): THREE.Texture | null {
+    let restoreMattes = () => {};
     try {
       const tgt = this.pt.target as THREE.WebGLRenderTarget;
       const W = tgt.width, H = tgt.height;
@@ -1875,6 +1898,10 @@ export class Engine {
       const prevClear = this.renderer.getClearColor(new THREE.Color()), prevAlpha = this.renderer.getClearAlpha();
       this.scene.background = null; this.scene.environment = null;
       this.camera.updateMatrixWorld();
+      // le pareti "matte" (tolte per guardare dentro) non si vedono neanche qui
+      const mattes: THREE.Object3D[] = [];
+      this.scene.traverse((o: any) => { if (o.isMesh && o.visible && o.material?.matte) { o.visible = false; mattes.push(o); } });
+      restoreMattes = () => { for (const o of mattes) o.visible = true; };
       // colore delle superfici
       const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
       const basics: THREE.Material[] = [];
@@ -1919,6 +1946,7 @@ export class Engine {
       this.renderer.setClearColor(new THREE.Color(1000, 0, 0), 1);
       this.renderer.setRenderTarget(dist); this.renderer.render(this.scene, this.camera);
       nm.dispose();
+      restoreMattes();
       this.scene.overrideMaterial = prevOv; this.scene.background = prevBg; this.scene.environment = prevEnv;
       this.renderer.setClearColor(prevClear, prevAlpha);
       const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H, emit.texture, this.pt.samples);
@@ -1927,6 +1955,7 @@ export class Engine {
       return out.texture;
     } catch (e) {
       console.warn(e);
+      restoreMattes();
       this.renderer.setRenderTarget(null);
       return this.readAdded();
     }
