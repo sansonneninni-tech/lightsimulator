@@ -1,4 +1,5 @@
 import { ReactNode, useLayoutEffect, useRef, useState } from 'react';
+import { eng } from '../engineRef';
 
 // Scheda in vetro che compare vicino al punto (x, y), sempre dentro lo schermo.
 export default function Pop({ x, y, width = 300, children, anchor = 'side', bottom, onClose, className = '' }: {
@@ -12,7 +13,22 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     ro.observe(el.current!);
     return () => ro.disconnect();
   }, []);
+  // telefono: foglio in basso, sopra il barra, che lascia libera la scena
+  const phone = typeof innerWidth !== 'undefined' && innerWidth <= 600;
+  const [mini, setMini] = useState(false);
   useLayoutEffect(() => {
+    if (!phone) return;
+    const d = document.getElementById('dock')?.getBoundingClientRect();
+    setPos({ left: 8, bottom: d ? innerHeight - d.top + 8 : 92, ox: x - 8, oy: 0 });
+  }, [phone, x]);
+  useLayoutEffect(() => {
+    if (!phone || !pos || !el.current) return;
+    const top = el.current.getBoundingClientRect().top;
+    eng()?.setViewShift((innerHeight - top) / 2);
+  }, [phone, pos, hgt, mini]);
+  useLayoutEffect(() => () => { if (phone) eng()?.setViewShift(0); }, [phone]);
+  useLayoutEffect(() => {
+    if (phone) return;
     // misure senza la trasformazione dell'animazione di apertura
     const r = { height: el.current!.offsetHeight };
     const W = innerWidth, H = innerHeight;
@@ -33,8 +49,9 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     setPos({ left, top, ox: x - left, oy: y - top });
   }, [x, y, width, anchor, bottom, hgt]);
   return (
-    <div ref={el} className={`pop glass ${className}`} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
-      style={{ width, left: pos?.left ?? -9999, top: pos?.top, bottom: pos?.bottom, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>
+    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && mini ? ' mini' : ''}`} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
+      style={{ width: phone ? innerWidth - 16 : width, left: pos?.left ?? -9999, top: pos?.top, bottom: pos?.bottom, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>
+      {phone && <div className="grab" onClick={() => setMini(!mini)} title={mini ? 'Apri' : 'Riduci'}><i /></div>}
       {children}
     </div>
   );

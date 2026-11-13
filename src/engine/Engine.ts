@@ -276,6 +276,15 @@ export class Engine {
     this.dirty = true;
   }
 
+  viewShift = 0;
+  setViewShift(px: number) {
+    px = Math.max(0, Math.round(px));
+    if (px === this.viewShift) return;
+    this.viewShift = px;
+    this.updateLens();
+    this.dirty = true;
+  }
+
   get cam(): CamState | null { return this.snapshot?.cam || null; }
 
   updateLens() {
@@ -295,6 +304,9 @@ export class Engine {
     this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(tanHalfV));
     this.camera.aspect = w / h;
     this.camera.filmGauge = sensor.width * (w / fw);
+    // telefono con un foglio aperto: la scena sale nella parte libera sopra il foglio
+    if (this.viewShift > 0 && !this.shot) this.camera.setViewOffset(w, h, 0, this.viewShift, w, h);
+    else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     this.quadMat.uniforms.frame.value.set(this.frameRect.x0, this.frameRect.y0, this.frameRect.x1, this.frameRect.y1);
     this.quadMat.uniforms.maskAlpha.value = ar ? 0.1 : 1;
@@ -1726,6 +1738,7 @@ export class Engine {
   // la stessa esposizione e lo stesso bilanciamento dell'anteprima, solo più pulito.
   async shoot(onProgress: (p: number) => void, samples = 384): Promise<HTMLCanvasElement | null> {
     if (this.shot || !this.snapshot) return null;
+    this.setViewShift(0);
     if (this.built) return this.shootBuilt(onProgress, 600);
     const s = this.snapshot;
     const added = s.lights.filter((L) => L.on && L.origin === 'aggiunta' && effectiveLumens(L, 0) > 0);

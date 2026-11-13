@@ -172,7 +172,17 @@ function LightHandle({ id, reg, color, on, sel, label, appear, win }: { id: stri
       let p: THREE.Vector3 | null;
       // guardando quasi di taglio il piano orizzontale è instabile: si passa al piano verticale
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(en.camera.quaternion);
-      if (s.level === undefined) s.level = !L.attached && Math.abs(fwd.y) < 0.2 && Math.abs(L.position[1] - en.camera.position.y) < 0.6;
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -L.position[1]);
+      if (s.level === undefined) {
+        // trascinamento relativo sul piano orizzontale della luce; se quel piano si vede quasi di
+        // taglio (luce all'altezza degli occhi o il dito vicino all'orizzonte) si passa al modo "a livello"
+        const d = en.camera.position.distanceTo(new THREE.Vector3(...L.position));
+        const h0 = en.rayPlane(s.x, s.y, plane);
+        s.h0 = h0; s.p0 = [...L.position];
+        const toL = new THREE.Vector3(...L.position).sub(en.camera.position).normalize();
+        s.level = !L.attached && (!h0 || h0.distanceTo(en.camera.position) > d * 2.2 || Math.abs(toL.y) < 0.35);
+        s.lx = s.x; s.ly = s.y;
+      }
       const vertical = e.altKey || s.level;
       if (vertical && e.altKey) {
         const pr = en.project(L.position);
@@ -187,10 +197,12 @@ function LightHandle({ id, reg, color, on, sel, label, appear, win }: { id: stri
         s.lx = e.clientX; s.ly = e.clientY;
         const fw = fwd.clone().setY(0).normalize();
         const rt = new THREE.Vector3(-fw.z, 0, fw.x);
-        p = new THREE.Vector3(...L.position).addScaledVector(rt, dx * mpp).addScaledVector(fw, -dy * mpp * 4);
+        p = new THREE.Vector3(...L.position).addScaledVector(rt, dx * mpp).addScaledVector(fw, -dy * mpp * 2.5);
       } else {
-        p = en.rayPlane(e.clientX, e.clientY, new THREE.Plane(new THREE.Vector3(0, 1, 0), -L.position[1]));
-        if (!p || p.distanceTo(en.camera.position) > 40) return;
+        const h = en.rayPlane(e.clientX, e.clientY, plane);
+        const d = en.camera.position.distanceTo(new THREE.Vector3(...s.p0));
+        if (!h || !s.h0 || h.distanceTo(en.camera.position) > Math.max(6, d * 3)) return;
+        p = new THREE.Vector3(...s.p0).add(h.clone().sub(s.h0));
       }
       if (L.attached) {
         // la luce di una lampada si sposta con la lampada
