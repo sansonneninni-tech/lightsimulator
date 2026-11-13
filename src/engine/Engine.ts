@@ -15,6 +15,7 @@ import type { PropState, CamState, SceneSnapshot } from '../store';
 import { RoomSpec, WallId, wallFrame, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
 import { FurnitureState, buildFurniture } from './furniture';
 import { denoise } from './denoise';
+import { Rigs } from './rigs';
 
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
@@ -160,6 +161,7 @@ export class Engine {
   skyCal = 10000;
 
   rasterLights = new THREE.Group();
+  rigs = new Rigs();
   lightObjs = new Map<string, LightObj>();
   people = new Map<string, { state: PersonState; obj: THREE.Group }>();
   props = new Map<string, { state: PropState; obj: THREE.Group }>();
@@ -240,6 +242,7 @@ export class Engine {
     (this.selBox.material as THREE.LineBasicMaterial).transparent = true;
     (this.selBox.material as THREE.LineBasicMaterial).opacity = 0.55;
     this.scene.add(this.selBox);
+    this.scene.add(this.rigs.group);
     this.rasterLights.add(this.sun, this.sun.target, this.ambient);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
@@ -875,6 +878,8 @@ export class Engine {
 
   syncLights(rawLights: LightState[], sun: SunState) {
     const lights = this.resolveLights(rawLights);
+    this.rigs.group.visible = !!this.built;
+    if (this.built) { this.rigs.floorY = this.bounds.min[1]; this.rigs.sync(rawLights); }
     this.glowFrames(lights);
     const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
     const skyK = sunSky(sun).skyK;
@@ -1757,6 +1762,8 @@ export class Engine {
     });
     const selVis = this.selBox.visible;
     this.selBox.visible = false;
+    const rigVis = this.rigs.group.visible;
+    this.rigs.group.visible = false;
     const prevBg = this.scene.background;
     this.scene.environment = this.skyTex;
     this.scene.environmentIntensity = 1;
@@ -1771,6 +1778,7 @@ export class Engine {
       for (const q of shades) { q.m.emissiveIntensity = q.m.userData.glowI || 0; q.m.transparent = q.t; q.m.opacity = q.o; }
       this.scene.environment = null;
       this.selBox.visible = selVis;
+      this.rigs.group.visible = rigVis;
     };
     return this.startPT(onProgress, samples, ptLights, prevBg);
   }

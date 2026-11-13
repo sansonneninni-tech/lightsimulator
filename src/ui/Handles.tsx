@@ -120,6 +120,7 @@ export default function Handles() {
       if (mp) put('meter', mp.p);
     };
     e.onFrame = place;
+    if (e.rigs.select(selection?.type === 'light' ? selection.id : null)) e.dirty = true;
     e.dirty = true;
     return () => { if (e.onFrame === place) e.onFrame = null; };
   }, [lights, people, props, selection, manikin, meterPin]);
