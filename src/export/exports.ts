@@ -15,6 +15,8 @@ export interface PlanInput {
   scene: SceneSnapshot;
   recon: { room: { min: [number, number, number]; max: [number, number, number] }; windows: { center: [number, number, number]; right: [number, number, number]; width: number }[] };
   camera: { position: [number, number, number]; dir: [number, number, number]; hfov: number };
+  // movimento di camera: posizione e direzione finali, descrizione
+  move?: { start: [number, number, number]; startDir: [number, number, number]; end: [number, number, number]; endDir: [number, number, number]; text: string };
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -67,7 +69,20 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   out += `<path d="M${X(cp[0])},${Z(cp[2])} L${X(cp[0] + left.x * len)},${Z(cp[2] + left.z * len)} L${X(cp[0] + right.x * len)},${Z(cp[2] + right.z * len)} Z" fill="rgba(0,0,0,.05)" stroke="#999" stroke-dasharray="4 4"/>`;
   const ang = Math.atan2(cd.x, -cd.z) * 180 / Math.PI;
   out += `<g transform="translate(${X(cp[0])},${Z(cp[2])}) rotate(${ang})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="#111"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="#111"/></g>`;
-  out += `<text x="${X(cp[0])}" y="${Z(cp[2]) + 32}" text-anchor="middle" font-size="12" fill="#111" font-weight="600">Camera</text>`;
+  if (inp.move) {
+    // movimento: camera di partenza e di arrivo, percorso tratteggiato con la freccia
+    const mv = inp.move;
+    const body = (p: [number, number, number], d: [number, number, number], fill: string) => {
+      const v = new THREE.Vector3(d[0], 0, d[2]).normalize();
+      const a = Math.atan2(v.x, -v.z) * 180 / Math.PI;
+      return `<g transform="translate(${X(p[0])},${Z(p[2])}) rotate(${a})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="${fill}"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="${fill}"/></g>`;
+    };
+    const sx0 = X(mv.start[0]), sz0 = Z(mv.start[2]), sx1 = X(mv.end[0]), sz1 = Z(mv.end[2]);
+    out += `<defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#d23"/></marker></defs>`;
+    if (Math.hypot(sx1 - sx0, sz1 - sz0) > 4) out += `<line x1="${sx0}" y1="${sz0}" x2="${sx1}" y2="${sz1}" stroke="#d23" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arr)"/>`;
+    out += body(mv.start, mv.startDir, '#111') + body(mv.end, mv.endDir, '#d23');
+    out += `<text x="${(sx0 + sx1) / 2}" y="${Math.max(sz0, sz1) + 34}" text-anchor="middle" font-size="12" fill="#d23" font-weight="600">${esc(mv.text)}</text>`;
+  } else out += `<text x="${X(cp[0])}" y="${Z(cp[2]) + 32}" text-anchor="middle" font-size="12" fill="#111" font-weight="600">Camera</text>`;
   // arredi (pianta)
   for (const f of scene.furniture || []) {
     const k = furnitureKind(f.kind);
@@ -225,7 +240,7 @@ export function sunLine(scene: SceneSnapshot) {
 
 const pdfText = (s: string) => s.replace(/−/g, '-').replace(/·/g, '-').replace(/—/g, '-').replace(/[’]/g, "'");
 
-export async function buildPDF(opts: { title: string; imageUrl: string; imgW: number; imgH: number; plan: PlanInput }) {
+export async function buildPDF(opts: { title: string; imageUrl: string; imgW: number; imgH: number; plan: PlanInput; frames?: { url: string; label: string }[] }) {
   const { scene } = opts.plan;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const PW = 297, PH = 210, M = 14;
@@ -245,6 +260,24 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   doc.addImage(opts.imageUrl, 'JPEG', (PW - iw) / 2, M + 16, iw, ih);
   doc.setFontSize(10); doc.setTextColor(40);
   doc.text(pdfText(`Camera: ${cameraLine(scene)}     Luce naturale: ${sunLine(scene)}`), M, PH - M);
+  // movimento di camera: tutti i fotogrammi in fila
+  if (opts.frames && opts.frames.length > 1 && opts.plan.move) {
+    doc.addPage();
+    header(`Movimento di camera: ${opts.plan.move.text}`);
+    const n = opts.frames.length, gap = 5;
+    const cols = n <= 3 ? n : 3, rowsN = Math.ceil(n / cols);
+    const cw = (PW - M * 2 - gap * (cols - 1)) / cols;
+    const ch = Math.min(cw * opts.imgH / opts.imgW, (PH - M * 2 - 34 - (rowsN - 1) * 12) / rowsN);
+    const fw = ch * opts.imgW / opts.imgH;
+    opts.frames.forEach((f, i) => {
+      const cx = M + (i % cols) * (cw + gap) + (cw - fw) / 2, cy = M + 18 + Math.floor(i / cols) * (ch + 12);
+      doc.addImage(f.url, 'JPEG', cx, cy, fw, ch);
+      doc.setFontSize(9); doc.setTextColor(40);
+      doc.text(pdfText(`${i + 1}. ${f.label}`), cx, cy + ch + 5);
+    });
+    doc.setFontSize(10); doc.setTextColor(40);
+    doc.text(pdfText(`${opts.plan.move.text}, ${n} fotogrammi. Partenza e arrivo sono disegnati nella pianta luci.`), M, PH - M);
+  }
   // pagina 2: pianta
   doc.addPage();
   header('Pianta luci');

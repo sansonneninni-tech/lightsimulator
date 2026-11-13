@@ -1,4 +1,6 @@
 // Pannelli del dock (Luci, Persone, Camera), luce naturale in alto a destra, menu del luogo in alto a sinistra.
+import { MOVES, moveLabel, CamMove } from '../engine/camMove';
+import { previewMove, shootMove } from '../shoot';
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
@@ -136,12 +138,43 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
         <div className="k"><span>Formato</span></div>
         <div className="chips">{ASPECTS.map((m) => <button key={m.id} className={`chip ${cam.aspect === m.id ? 'on' : ''}`} onClick={() => set({ aspect: m.id })}>{m.name}</button>)}</div>
       </div>
+      <MoveRow onClose={onClose} />
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
         <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e && hasPhoto) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>{hasPhoto ? "Torna all'inquadratura della foto" : 'Torna alla vista iniziale'}</button>
       </div>
       <div className="hint">Muoviti nella stanza: trascina per guardare, rotella o pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), W A S D per camminare, Q E per scendere e salire, tasto destro o due dita per spostarti di lato.</div>
     </Pop>
+  );
+}
+
+// movimento di camera: tipo, quantità, fotogrammi; "Prova" lo mostra, "Scatta" ne fa i fotogrammi finali
+function MoveRow({ onClose }: { onClose: () => void }) {
+  const mv = useStore((s) => s.camMove);
+  const set = (m: CamMove | null) => useStore.setState({ camMove: m });
+  const d = mv ? MOVES.find((q) => q.id === mv.kind)! : null;
+  return (
+    <div className="row">
+      <div className="k"><span>Movimento</span>{mv && <b className="num">{moveLabel(mv)}</b>}</div>
+      <div className="chips">
+        <button className={`chip ${!mv ? 'on' : ''}`} onClick={() => set(null)}>Fermo</button>
+        {MOVES.map((q) => <button key={q.id} className={`chip ${mv?.kind === q.id ? 'on' : ''}`} onClick={() => set({ kind: q.id, amount: mv?.kind === q.id ? mv.amount : q.def, frames: mv?.frames || 3 })}>{q.name}</button>)}
+      </div>
+      {mv && d && (
+        <>
+          <input type="range" min={d.min} max={d.max} step={d.step} value={mv.amount} onChange={(e) => set({ ...mv, amount: +e.target.value })} style={{ marginTop: 12 }} />
+          <div className="k" style={{ marginTop: 6 }}><span style={{ color: 'var(--t3)' }}>{d.neg}</span><span style={{ color: 'var(--t3)' }}>{d.pos}</span></div>
+          <div className="line" style={{ marginTop: 6 }}><span>Fotogrammi</span>
+            <div className="chips">{[2, 3, 5].map((n) => <button key={n} className={`chip ${mv.frames === n ? 'on' : ''}`} onClick={() => set({ ...mv, frames: n })}>{n}</button>)}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn" onClick={() => previewMove(mv)}>Prova il movimento</button>
+            <button className="btn primary" onClick={() => { onClose(); setTimeout(() => shootMove(mv), 50); }}>Scatta {mv.frames} fotogrammi</button>
+          </div>
+          <div className="hint">Parte dall'inquadratura di adesso. Ogni fotogramma è un render finale; nel rullino restano insieme, con il movimento scritto nel PDF troupe e disegnato nella pianta.</div>
+        </>
+      )}
+    </div>
   );
 }
 

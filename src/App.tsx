@@ -16,6 +16,7 @@ import { fmtHour, WEATHER } from './engine/sun';
 import { fmtStop } from './engine/photometry';
 import { newId } from './engine/photometry';
 import * as THREE from 'three';
+import { shootOnce } from './shoot';
 
 const FC_LEGEND: [string, string][] = [['#730f99', 'Nero'], ['#1a40f2', '−4'], ['#3fbf3f', '18%'], ['#f28cad', 'Pelle'], ['#ffe61a', '+3'], ['#f21a1a', 'Bruciato']];
 
@@ -234,24 +235,8 @@ export default function App() {
   }, []);
 
   const shoot = async () => {
-    const e = eng();
-    const s = useStore.getState();
-    if (!e || s.phase !== 'ready') return;
-    if (s.shooting) { e.cancelShot(); return; }
-    setPanel(null);
-    useStore.setState({ shooting: 0.001, selection: null, manikin: null, meterPin: null });
-    e.navEnabled = false;
-    const canvas = await e.shoot((p) => useStore.setState({ shooting: Math.max(0.001, p) }));
-    e.navEnabled = true;
-    useStore.setState({ shooting: 0 });
-    if (!canvas) { s.showToast('Scatto annullato.'); return; }
-    const url = canvas.toDataURL('image/jpeg', 0.92);
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion);
-    const fr = e.frameRect;
-    const hfov = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(e.camera.fov) / 2) * e.camera.aspect * (fr.x1 - fr.x0));
-    const shot: Shot & any = { id: newId('s'), url, width: canvas.width, height: canvas.height, scene: snapshotOf(), createdAt: Date.now(), camPos: e.camera.position.toArray(), camDir: fwd.toArray(), hfov };
-    useStore.setState({ shots: [...useStore.getState().shots, shot] });
-    useStore.getState().showToast('Scatto salvato nel rullino, con lo stato di tutte le luci.');
+    if (!useStore.getState().shooting) setPanel(null);
+    await shootOnce();
   };
 
   // posizione della foto originale (Spazio): stessa apertura verticale della foto

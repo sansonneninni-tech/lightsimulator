@@ -33,6 +33,8 @@ export interface Shot {
   height: number;
   scene: SceneSnapshot;
   createdAt: number;
+  // fotogramma di un movimento di camera
+  move?: { group: string; kind: string; amount: number; frame: number; of: number; label: string; text: string; start: [number, number, number]; end: [number, number, number]; endDir: [number, number, number] };
 }
 
 export interface SceneSnapshot {
@@ -65,6 +67,7 @@ interface Store extends SceneSnapshot {
   viewer: string | null;
   shots: Shot[];
   shooting: number; // 0 = no, 0..1 progresso
+  camMove: import('./engine/camMove').CamMove | null; // movimento di camera scelto (null = camera ferma)
   past: string[];
   future: string[];
   toast: { text: string; t: number } | null;
@@ -107,6 +110,7 @@ export const useStore = create<Store>((set, get) => ({
   viewer: null,
   shots: [],
   shooting: 0,
+  camMove: null,
   past: [],
   future: [],
   toast: null,

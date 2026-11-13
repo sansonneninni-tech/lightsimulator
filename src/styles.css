@@ -231,3 +231,17 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 .pop .grip{height:10px;margin:-10px -16px 4px;display:flex;justify-content:center;align-items:flex-start;padding-top:2px}
 .pop .grip i{width:32px;height:3px;border-radius:2px;background:rgba(255,255,255,.22);transition:background .2s}
 .pop:hover .grip i{background:rgba(255,255,255,.45)}
+.btn.primary{background:#fff;color:#0A0A0B}
+#viewer .frames{display:flex;gap:8px;max-width:92vw;overflow-x:auto}
+#viewer .frames button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:4px;border-radius:8px;color:var(--t3);font-size:11px;border:1px solid transparent}
+#viewer .frames button.on{border-color:rgba(255,255,255,.6);color:var(--t1)}
+#viewer .frames img{height:54px;border-radius:4px;display:block}
+@media (max-width:600px){
+  #viewer{gap:12px}
+  #viewer .stage{width:94vw;height:52vh}
+  #viewer .actions{flex-wrap:wrap;justify-content:center;max-width:94vw}
+  #viewer .actions button{padding:8px 10px;font-size:12px}
+  #viewer .frames img{height:44px}
+  #viewer .meta{max-width:90vw;text-align:center;line-height:1.5}
+  #viewer .close{top:10px;right:10px}
+}
