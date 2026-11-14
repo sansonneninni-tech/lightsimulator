@@ -15,18 +15,53 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
   }, []);
   // telefono: foglio in basso, sopra il barra, che lascia libera la scena
   const phone = typeof innerWidth !== 'undefined' && innerWidth <= 600;
-  const [mini, setMini] = useState(false);
+  // tre altezze: 0 solo il titolo, 1 metà (predefinita), 2 tutto
+  const [snap, setSnap] = useState<0 | 1 | 2>(1);
   useLayoutEffect(() => {
     if (!phone) return;
-    const d = document.getElementById('dock')?.getBoundingClientRect();
-    setPos({ left: 8, bottom: d ? innerHeight - d.top + 8 : 92, ox: x - 8, oy: 0 });
+    setPos({ left: 8, bottom: 8, ox: x - 8, oy: 0 });
   }, [phone, x]);
   useLayoutEffect(() => {
     if (!phone || !pos || !el.current) return;
     const top = el.current.getBoundingClientRect().top;
     eng()?.setViewShift((innerHeight - top) / 2);
-  }, [phone, pos, hgt, mini]);
-  useLayoutEffect(() => () => { if (phone) eng()?.setViewShift(0); }, [phone]);
+  }, [phone, pos, hgt, snap]);
+  useLayoutEffect(() => {
+    if (!phone) return;
+    // la barra in basso lascia il posto al foglio finché è aperto
+    const b = document.body;
+    b.dataset.sheets = String(+(b.dataset.sheets || 0) + 1);
+    b.classList.add('sheet-open');
+    return () => {
+      const n = +(b.dataset.sheets || 1) - 1;
+      b.dataset.sheets = String(n);
+      if (n <= 0) { b.classList.remove('sheet-open'); eng()?.setViewShift(0); }
+    };
+  }, [phone]);
+  useLayoutEffect(() => {
+    if (!phone) return;
+    // trascinando nella scena (guardarsi intorno, spostare una luce) il foglio si abbassa al solo titolo
+    const down = (ev: PointerEvent) => {
+      const t = ev.target as HTMLElement;
+      if (el.current?.contains(t) || t.closest?.('.pop,#dock,.chrome,#viewer')) return;
+      const sx = ev.clientX, sy = ev.clientY;
+      const mv = (m: PointerEvent) => { if (Math.hypot(m.clientX - sx, m.clientY - sy) > 10) { setSnap(0); end(); } };
+      const end = () => { removeEventListener('pointermove', mv, true); removeEventListener('pointerup', end, true); removeEventListener('pointercancel', end, true); };
+      addEventListener('pointermove', mv, true); addEventListener('pointerup', end, true); addEventListener('pointercancel', end, true);
+    };
+    addEventListener('pointerdown', down, true);
+    return () => removeEventListener('pointerdown', down, true);
+  }, [phone]);
+  const grabDown = (e: React.PointerEvent) => {
+    const sy = e.clientY;
+    const up = (ev: PointerEvent) => {
+      removeEventListener('pointerup', up);
+      const dy = ev.clientY - sy;
+      if (Math.abs(dy) < 8) setSnap((s) => (s === 1 ? 0 : 1));
+      else setSnap((s) => (dy < 0 ? Math.min(2, s + 1) : Math.max(0, s - 1)) as 0 | 1 | 2);
+    };
+    addEventListener('pointerup', up);
+  };
   // computer: la scheda si sposta trascinandola (da un punto qualsiasi che non sia un comando)
   const [pinned, setPinned] = useState<{ left: number; top: number } | null>(null);
   const dragStart = (e: React.PointerEvent) => {
@@ -69,9 +104,9 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     setPos({ left, top, ox: x - left, oy: y - top });
   }, [x, y, width, anchor, bottom, hgt]);
   return (
-    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && mini ? ' mini' : ''}`} onPointerDown={dragStart} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
+    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && snap === 0 ? ' mini' : ''}${phone && snap === 2 ? ' full' : ''}`} onPointerDown={dragStart} onClickCapture={(e) => { if (phone && snap === 0 && !(e.target as HTMLElement).closest('.toggle,.x')) { e.stopPropagation(); setSnap(1); } }} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
       style={{ width: phone ? innerWidth - 16 : width, left: pinned ? pinned.left : pos?.left ?? -9999, top: pinned ? pinned.top : pos?.top, bottom: pinned ? undefined : pos?.bottom, animation: pinned ? 'none' : undefined, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>
-      {phone ? <div className="grab" onClick={() => setMini(!mini)} title={mini ? 'Apri' : 'Riduci'}><i /></div>
+      {phone ? <div className="grab" onPointerDown={grabDown} title={snap === 0 ? 'Apri' : 'Riduci'}><i />{onClose && <button className="x" aria-label="Chiudi" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(); }}>×</button>}</div>
         : <div className="grip" title="Trascina per spostare"><i /></div>}
       {children}
     </div>
