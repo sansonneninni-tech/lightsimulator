@@ -6,12 +6,17 @@ import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { Reconstruction } from './reconstruct';
 import {
-  LightState, fixtureById, effectiveLumens, lightColor, spotAngles, spotCandela, illuminanceAt,
+  LightState, fixtureById, effectiveLumens, diffusionById, lightColor, spotAngles, spotCandela, illuminanceAt,
   ev100, exposureFromEV100, ISO_VALUES, FSTOPS, SENSORS, ASPECTS, fStopForLux,
 } from './photometry';
 import { PersonState, buildMannequin, applyPose } from './mannequin';
 import { SunState, sunDirection, sunSky } from './sun';
 import type { PropState, CamState, SceneSnapshot } from '../store';
+import { RoomSpec, WallId, wallFrame, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
+import { FurnitureState, buildFurniture } from './furniture';
+import { denoise } from './denoise';
+import { Rigs } from './rigs';
+import { loadFigure, poseFigure, figureModel } from './figure';
 
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
@@ -120,6 +125,8 @@ void main(){
 
 interface LightObj { state: LightState; raster: THREE.Light; target: THREE.Object3D; doors: THREE.Group | null }
 
+export interface Grab { start?: () => void; move: (e: PointerEvent) => void; end?: () => void }
+
 export interface Hit { point: THREE.Vector3; normal: THREE.Vector3; object: THREE.Object3D }
 
 export class Engine {
@@ -155,6 +162,7 @@ export class Engine {
   skyCal = 10000;
 
   rasterLights = new THREE.Group();
+  rigs = new Rigs();
   lightObjs = new Map<string, LightObj>();
   people = new Map<string, { state: PersonState; obj: THREE.Group }>();
   props = new Map<string, { state: PropState; obj: THREE.Group }>();
@@ -195,6 +203,14 @@ export class Engine {
   lastTime = performance.now();
   disposed = false;
   navEnabled = true;
+  // stanza costruita a mano
+  built: RoomSpec | null = null;
+  furn = new Map<string, { state: FurnitureState; obj: THREE.Group; ceil: number }>();
+  skyTex: THREE.DataTexture | null = null;
+  selBox = new THREE.Box3Helper(new THREE.Box3(), 0xffffff);
+  selId: string | null = null;
+  picks: THREE.Mesh[] = [];
+  tmpRT: THREE.WebGLRenderTarget | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -223,11 +239,16 @@ export class Engine {
 
     this.scene.background = new THREE.Color(0x050506);
     this.scene.add(this.room, this.rasterLights, this.camera);
+    this.selBox.visible = false;
+    (this.selBox.material as THREE.LineBasicMaterial).transparent = true;
+    (this.selBox.material as THREE.LineBasicMaterial).opacity = 0.55;
+    this.scene.add(this.selBox);
+    this.scene.add(this.rigs.group);
     this.rasterLights.add(this.sun, this.sun.target, this.ambient);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
     this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.03;
+    this.sun.shadow.normalBias = 0.015;
     this.camera.filmGauge = 24.89;
     this.camera.apertureBlades = 0;
 
@@ -255,6 +276,15 @@ export class Engine {
     this.dirty = true;
   }
 
+  viewShift = 0;
+  setViewShift(px: number) {
+    px = Math.max(0, Math.round(px));
+    if (px === this.viewShift) return;
+    this.viewShift = px;
+    this.updateLens();
+    this.dirty = true;
+  }
+
   get cam(): CamState | null { return this.snapshot?.cam || null; }
 
   updateLens() {
@@ -274,6 +304,9 @@ export class Engine {
     this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(tanHalfV));
     this.camera.aspect = w / h;
     this.camera.filmGauge = sensor.width * (w / fw);
+    // telefono con un foglio aperto: la scena sale nella parte libera sopra il foglio
+    if (this.viewShift > 0 && !this.shot) this.camera.setViewOffset(w, h, 0, this.viewShift, w, h);
+    else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     this.quadMat.uniforms.frame.value.set(this.frameRect.x0, this.frameRect.y0, this.frameRect.x1, this.frameRect.y1);
     this.quadMat.uniforms.maskAlpha.value = ar ? 0.1 : 1;
@@ -281,7 +314,7 @@ export class Engine {
 
   // focale equivalente per il campo visivo verticale della foto
   focalForPhoto(sensorId: string) {
-    if (!this.recon) return 24;
+    if (!this.recon) return 24 * ((SENSORS.find((s) => s.id === sensorId) || SENSORS[0]).width / 24.89);
     const sensor = SENSORS.find((s) => s.id === sensorId) || SENSORS[0];
     const w = Math.max(1, this.container.clientWidth), h = Math.max(1, this.container.clientHeight);
     const tanV = Math.tan(THREE.MathUtils.degToRad(this.recon.camera.fov) / 2);
@@ -293,6 +326,8 @@ export class Engine {
 
   // ---------------- ricostruzione ----------------
   loadRecon(recon: Reconstruction) {
+    this.clearBuilt();
+    this.picks = [];
     this.recon = recon;
     for (const c of [...this.room.children]) { this.room.remove(c); c.traverse((o: any) => { o.geometry?.dispose?.(); }); }
     this.surfaces = [];
@@ -485,6 +520,125 @@ export class Engine {
     this.dirty = true;
   }
 
+  // ---------------- stanza costruita a mano ----------------
+  get bounds(): { min: [number, number, number]; max: [number, number, number] } {
+    if (this.built) return roomBounds(this.built);
+    if (this.recon) return this.recon.room;
+    return { min: [-3, 0, -3], max: [3, 2.8, 3] };
+  }
+
+  windowList(): WindowInfoLite[] {
+    if (this.built) return windowInfos(this.built, true);
+    return this.recon?.windows || [];
+  }
+
+  clearBuilt() {
+    for (const [, o] of this.furn) this.scene.remove(o.obj);
+    this.furn.clear();
+    this.built = null;
+  }
+
+  loadRoom(spec: RoomSpec, resetView: boolean) {
+    const first = !this.built;
+    this.recon = null;
+    for (const c of [...this.room.children]) { this.room.remove(c); c.traverse((o: any) => { o.geometry?.dispose?.(); }); }
+    this.surfaces = []; this.panes = []; this.maskLin.clear(); this.extraMats = []; this.boxMats = [];
+    this.fillMesh = null; this.material = null; this.blurMaterial = null; this.photoLin = null; this.emissiveCanvas = null;
+    this.hasBase = false; this.quadMat.uniforms.relightW.value = 0;
+    this.built = spec;
+    const { group, surfaces, picks } = buildRoom(spec);
+    this.room.add(group);
+    this.surfaces = surfaces;
+    this.picks = picks;
+    this.K = 1;
+    // vista iniziale: da un angolo verso l'angolo opposto, come si entra in una stanza
+    const W = spec.width, D = spec.depth;
+    const m = Math.min(0.5, W * 0.1, D * 0.1);
+    const pos = new THREE.Vector3(W / 2 - m, Math.min(1.6, spec.height - 0.3), D / 2 - m);
+    const dir = new THREE.Vector3(-W * 0.22, 1.05, -D * 0.3).sub(pos);
+    this.homePose = {
+      pos,
+      quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.atan2(dir.y, Math.hypot(dir.x, dir.z)), Math.atan2(-dir.x, -dir.z), 0, 'YXZ')),
+      fov: 50,
+    };
+    if (resetView || first) this.resetView(); else { this.applyLook(); }
+    const b = this.bounds;
+    const size = new THREE.Vector3(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+    const r = size.length() / 2 + 0.6;
+    const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
+    sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.1; sc.far = r * 4; sc.updateProjectionMatrix();
+    // le lampade appese seguono l'altezza del soffitto
+    for (const [id, o] of this.furn) if (o.ceil !== spec.height) { this.scene.remove(o.obj); this.furn.delete(id); }
+    if (this.snapshot) this.syncSun(this.snapshot.sun);
+    this.dirty = true;
+  }
+
+  syncFurniture(list: FurnitureState[]) {
+    const ids = new Set(list.map((f) => f.id));
+    for (const [id, o] of this.furn) if (!ids.has(id)) { this.scene.remove(o.obj); this.furn.delete(id); }
+    const ceil = this.built?.height || 2.8;
+    for (const f of list) {
+      let o = this.furn.get(f.id);
+      if (!o || o.state.kind !== f.kind || o.state.color !== f.color || o.ceil !== ceil) {
+        if (o) this.scene.remove(o.obj);
+        const obj = buildFurniture(f, ceil);
+        obj.userData.furnitureId = f.id;
+        this.scene.add(obj);
+        o = { state: f, obj, ceil };
+        this.furn.set(f.id, o);
+      }
+      o.state = f;
+      o.obj.position.set(...f.position);
+      o.obj.rotation.set(0, THREE.MathUtils.degToRad(f.rotationY), 0);
+      o.obj.updateMatrixWorld(true);
+    }
+    this.updateSelBox();
+    this.updateGlow();
+  }
+
+  setSelected(id: string | null) {
+    this.selId = id;
+    this.updateSelBox();
+    this.dirty = true;
+  }
+
+  updateSelBox() {
+    const o = this.selId ? this.furn.get(this.selId) : null;
+    if (o) { this.selBox.box.setFromObject(o.obj); this.selBox.visible = true; return; }
+    // apertura (finestra, porta): il riquadro del suo telaio
+    const box = new THREE.Box3();
+    if (this.selId) this.room.traverse((m: any) => { if (m.isMesh && m.userData.openingId === this.selId) box.expandByObject(m); });
+    if (!box.isEmpty()) { this.selBox.box.copy(box.expandByScalar(0.02)); this.selBox.visible = true; return; }
+    this.selBox.visible = false;
+  }
+
+  // lampadine e paralumi accesi come la loro luce
+  updateGlow() {
+    if (!this.snapshot) return;
+    const lights = this.snapshot.lights;
+    for (const [id, o] of this.furn) {
+      const L = lights.find((l) => l.attached === id);
+      const lm = L && L.on ? effectiveLumens(L, 0) : 0;
+      const col = L ? lightColor(L.kelvin, L.gel) : new THREE.Color(1, 1, 1);
+      o.obj.traverse((m: any) => {
+        if (!m.isMesh) return;
+        if (m.userData.bulb) {
+          const r = (m.geometry as THREE.SphereGeometry).parameters.radius;
+          m.material.emissive.copy(col);
+          m.material.emissiveIntensity = lm / (Math.PI * 4 * Math.PI * r * r);
+        } else if (m.userData.glow) {
+          const g = m.geometry as THREE.CylinderGeometry;
+          const rr = (g.parameters.radiusTop + g.parameters.radiusBottom) / 2;
+          // luce che attraversa il tessuto (circa un quarto), distribuita sul paralume
+          m.material.emissive.copy(col).multiply(new THREE.Color(1, 0.93, 0.82));
+          m.material.emissiveIntensity = (lm * 0.25) / (Math.PI * 2 * Math.PI * rr * g.parameters.height * 2);
+        }
+      });
+    }
+  }
+
+  furnitureObjects() { return [...this.furn.values()].map((f) => f.obj); }
+
   buildBox(recon: Reconstruction, mat: THREE.MeshStandardMaterial) {
     const [x0, y0, z0] = recon.room.min, [x1, y1, z1] = recon.room.max;
     const camPos = new THREE.Vector3(...recon.camera.position);
@@ -596,12 +750,17 @@ export class Engine {
     const prev = this.snapshot;
     this.snapshot = s;
     if (!prev || prev.cam !== s.cam) { this.updateLens(); this.updateExposure(); }
-    if (!prev || prev.lights !== s.lights || prev.sun !== s.sun) this.syncLights(s.lights, s.sun);
-    if (!prev || prev.sun !== s.sun) this.syncSun(s.sun);
+    if (!prev || prev.lights !== s.lights || prev.sun !== s.sun || prev.props !== s.props) this.syncLights(s.lights, s.sun);
+    if (!prev || prev.sun !== s.sun || (this.built && prev.lights !== s.lights && this.windowGain(prev.lights) !== this.windowGain(s.lights))) this.syncSun(s.sun);
     if (!prev || prev.people !== s.people) this.syncPeople(s.people);
     if (!prev || prev.props !== s.props) this.syncProps(s.props);
+    if (!prev || prev.props !== s.props || prev.lights !== s.lights) this.glowFrames(this.resolveLights(s.lights));
+    if (s.room && (!prev || prev.room !== s.room || !this.built)) { this.loadRoom(s.room, false); this.updateSelBox(); }
+    if (!prev || prev.furniture !== s.furniture || prev.room !== s.room) this.syncFurniture(s.furniture || []);
+    if (!prev || prev.lights !== s.lights) this.updateGlow();
     if (!prev || prev.lights !== s.lights || prev.ambient !== s.ambient || prev.sun !== s.sun) this.updateEmissive();
     this.updateIndirect();
+    this.syncPropLights();
     this.quadMat.uniforms.falseColor.value = s.cam.falseColor ? 1 : 0;
     this.dirty = true;
   }
@@ -611,14 +770,130 @@ export class Engine {
     if (!c) return;
     this.exposure = exposureFromEV100(ev100(c.fStop, c.shutter, c.iso));
     this.quadMat.uniforms.exposure.value = this.exposure;
-    this.camera.fStop = c.fStop;
+    // la profondità di campo si calcola dopo (uguale in anteprima e nello scatto)
+    this.camera.fStop = 1e9;
   }
 
   skyLux() {
     return this.snapshot ? (this.snapshot.sun.enabled ? sunSky(this.snapshot.sun).skyLux : 0) : 10000;
   }
 
-  syncLights(lights: LightState[], sun: SunState) {
+  // una luce che punta attraverso un telaio di diffusione diventa una sorgente grande e morbida
+  // grande quanto il telaio (con la parte di flusso che lo colpisce, meno l'assorbimento del telo)
+  diffused(L: LightState, props: PropState[]): LightState | null {
+    if (L.origin === 'finestra' || L.attached) return null;
+    const pos = new THREE.Vector3(...L.position), tgt = new THREE.Vector3(...L.target);
+    const reach = pos.distanceTo(tgt);
+    if (reach < 1e-3) return null;
+    const dir = tgt.clone().sub(pos).normalize();
+    const fx = fixtureById(L.fixtureId);
+    let best: { t: number; L: LightState } | null = null;
+    for (const p of props) {
+      if (p.kind !== 'diffusore') continue;
+      const rot = new THREE.Euler(THREE.MathUtils.degToRad(p.tilt), THREE.MathUtils.degToRad(p.rotationY), 0, 'YXZ');
+      const n = new THREE.Vector3(0, 0, 1).applyEuler(rot), right = new THREE.Vector3(1, 0, 0).applyEuler(rot), up = new THREE.Vector3(0, 1, 0).applyEuler(rot);
+      const c = new THREE.Vector3(...p.position);
+      const den = dir.dot(n);
+      if (Math.abs(den) < 0.05) continue;
+      const t = c.clone().sub(pos).dot(n) / den;
+      if (t < 0.05 || t > reach + 1) continue;
+      const h = pos.clone().addScaledVector(dir, t).sub(c);
+      const [w, hh] = p.size;
+      if (Math.abs(h.dot(right)) > w * 0.65 || Math.abs(h.dot(up)) > hh * 0.65) continue;
+      if (best && best.t < t) continue;
+      const omega = Math.min(2 * Math.PI, (w * hh * Math.abs(den)) / (t * t));
+      let frac: number;
+      if (fx.kind === 'spot') { const { field } = spotAngles(L); frac = omega / (2 * Math.PI * (1 - Math.cos(THREE.MathUtils.degToRad(Math.min(170, field)) / 2))); }
+      else if (fx.kind === 'area') frac = omega / Math.PI;
+      else frac = omega / (4 * Math.PI);
+      const out = den > 0 ? n : n.clone().negate();
+      const ctr = c.clone().addScaledVector(out, 0.03);
+      best = { t, L: {
+        ...L, fixtureId: 'panel-120x60', position: ctr.toArray() as any, target: ctr.clone().addScaledVector(out, 2).toArray() as any,
+        size: [w, hh], softness: 0, diffusion: 'none', virtualLm: effectiveLumens(L, 0) * Math.min(1, frac) * 0.7,
+      } };
+      (best.L as any).frameId = p.id;
+    }
+    return best?.L || null;
+  }
+
+  resolveLights(lights: LightState[]) {
+    const props = this.snapshot?.props || [];
+    if (!props.some((p) => p.kind === 'diffusore')) return lights;
+    return lights.map((L) => this.diffused(L, props) || L);
+  }
+
+  // anteprima: il pannello bianco rimbalza la luce che lo colpisce, il pannello nero toglie il
+  // riempimento della stanza dal suo lato (nello scatto lo fa da solo il path tracing)
+  propLights = new Map<string, THREE.SpotLight>();
+  syncPropLights() {
+    const want = new Set<string>();
+    const s = this.snapshot;
+    if (s) for (const p of s.props) {
+      if (p.kind !== 'bianco' && p.kind !== 'nero') continue;
+      const rot = new THREE.Euler(THREE.MathUtils.degToRad(p.tilt), THREE.MathUtils.degToRad(p.rotationY), 0, 'YXZ');
+      const n = new THREE.Vector3(0, 0, 1).applyEuler(rot);
+      const c = new THREE.Vector3(...p.position);
+      const A = p.size[0] * p.size[1];
+      for (const side of [1, -1]) {
+        const nn = n.clone().multiplyScalar(side);
+        let I = 0;
+        if (p.kind === 'bianco') {
+          // luce che arriva su questa faccia (senza il riempimento stimato), riflessa all'85%
+          const r = this.readingAt(c.clone().addScaledVector(nn, 0.02), nn);
+          const E = r ? Math.max(0, r.lux - this.ambient.intensity) : 0;
+          I = (0.85 * E * A) / Math.PI;
+        } else {
+          // superficie nera: dal suo lato manca la luce che la stanza rimbalzerebbe
+          I = -(this.ambient.intensity / Math.PI) * A * 0.9;
+        }
+        if (Math.abs(I) < 1e-3) continue;
+        const key = `${p.id}:${side}`;
+        want.add(key);
+        let l = this.propLights.get(key);
+        if (!l) {
+          l = new THREE.SpotLight();
+          l.angle = THREE.MathUtils.degToRad(84); l.penumbra = 1; l.decay = 2; l.distance = 0;
+          l.castShadow = true;
+          l.shadow.mapSize.set(512, 512); l.shadow.bias = -0.0006; l.shadow.normalBias = 0.02;
+          l.shadow.camera.near = 0.08; l.shadow.radius = 6; (l.shadow.camera as THREE.PerspectiveCamera).fov = 170;
+          this.rasterLights.add(l, l.target);
+          this.propLights.set(key, l);
+        }
+        l.color.setRGB(1, 1, 1);
+        l.intensity = I;
+        l.position.copy(c).addScaledVector(nn, 0.04);
+        l.target.position.copy(c).addScaledVector(nn, 2);
+        l.target.updateMatrixWorld();
+      }
+    }
+    for (const [k, l] of this.propLights) if (!want.has(k)) { this.rasterLights.remove(l, l.target); l.shadow.map?.dispose(); l.dispose(); this.propLights.delete(k); }
+    this.dirty = true;
+  }
+
+  // il telo del telaio si illumina (solo in anteprima: nello scatto la luce è la sorgente stessa)
+  glowFrames(lights: LightState[]) {
+    const lum = new Map<string, number>();
+    for (const L of lights) {
+      const id = (L as any).frameId;
+      if (!id || !L.on) continue;
+      lum.set(id, (lum.get(id) || 0) + effectiveLumens(L, 0) / (Math.PI * L.size[0] * L.size[1]));
+    }
+    for (const [id, o] of this.props) {
+      if (o.state.kind !== 'diffusore') continue;
+      const m = (o.obj.getObjectByName('pannello') as THREE.Mesh).material as THREE.MeshStandardMaterial;
+      const v = lum.get(id) || 0;
+      m.emissive.setRGB(1, 1, 1);
+      m.emissiveIntensity = v;
+      m.userData.glow = v;
+    }
+  }
+
+  syncLights(rawLights: LightState[], sun: SunState) {
+    const lights = this.resolveLights(rawLights);
+    this.rigs.group.visible = !!this.built;
+    if (this.built) { this.rigs.floorY = this.bounds.min[1]; this.rigs.sync(rawLights); }
+    this.glowFrames(lights);
     const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
     const skyK = sunSky(sun).skyK;
     const ids = new Set(lights.map((l) => l.id));
@@ -661,7 +936,7 @@ export class Engine {
       if (wantKind === 'point') {
         r.intensity = lm / (4 * Math.PI);
         r.decay = 2; r.distance = 0;
-        r.shadow.radius = 2 + L.softness * 8;
+        r.shadow.radius = 2 + L.softness * 8 + diffusionById(L.diffusion).spread * 8;
       } else if (wantKind === 'area') {
         // emettitore lambertiano approssimato con uno spot morbido
         r.intensity = lm / Math.PI;
@@ -677,7 +952,7 @@ export class Engine {
         r.angle = THREE.MathUtils.degToRad(Math.min(170, field) / 2);
         r.penumbra = Math.min(1, Math.max(0.05, 1 - beam / field));
         r.decay = 2; r.distance = 0;
-        r.shadow.radius = 1 + L.softness * 6;
+        r.shadow.radius = 1 + L.softness * 6 + diffusionById(L.diffusion).spread * 10;
       }
       // bandiere (alette) per gli spot
       const bd = L.barnDoors;
@@ -696,14 +971,27 @@ export class Engine {
     if (o.doors) this.scene.remove(o.doors);
   }
 
+  // stanza costruita: il cursore della luce dalle finestre fa da filtro ND su tutte le finestre
+  // (sole e cielo insieme, uguale in anteprima e nello scatto)
+  windowGain(lights?: LightState[]) {
+    if (!this.built) return 1;
+    const ws = (lights || this.snapshot?.lights || []).filter((L) => L.origin === 'finestra');
+    if (!ws.length) return 1;
+    const on = ws.filter((L) => L.on);
+    if (!on.length) return 0;
+    return Math.pow(2, Math.max(...on.map((L) => L.stops)));
+  }
+
   syncSun(s: SunState) {
     const { dir, elevation } = sunDirection(s);
     const sk = sunSky(s);
-    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && !!this.recon?.windows.length;
+    const gain = this.windowGain();
+    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && this.windowList().length > 0 && gain > 0;
     this.sun.visible = on;
-    this.sun.intensity = on ? sk.sunLux : 0;
+    this.sun.intensity = on ? sk.sunLux * gain : 0;
     this.sun.color.copy(lightColor(sk.sunK, 'none'));
-    const c = this.recon ? new THREE.Vector3((this.recon.room.min[0] + this.recon.room.max[0]) / 2, 1.2, (this.recon.room.min[2] + this.recon.room.max[2]) / 2) : new THREE.Vector3();
+    const bb = this.bounds;
+    const c = new THREE.Vector3((bb.min[0] + bb.max[0]) / 2, 1.2, (bb.min[2] + bb.max[2]) / 2);
     const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
     this.sun.position.copy(c).addScaledVector(dir, sc.far / 2);
     this.sun.target.position.copy(c);
@@ -713,9 +1001,22 @@ export class Engine {
     for (const p of this.panes) {
       (p.mesh.material as THREE.MeshPhysicalMaterial).emissiveIntensity = this.K * Math.max(0.002, f);
     }
+    // stanza costruita: cielo e terreno fuori dalle finestre
+    if (this.built) {
+      const skyLux = (s.enabled ? sk.skyLux : 0.3) * gain;
+      const groundLux = (on ? sk.sunLux * gain * Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation))) : 0) + skyLux;
+      const skyCol = lightColor(sk.skyK, 'none');
+      this.skyTex = skyTexture(skyLux / Math.PI, skyCol, (0.18 * groundLux) / Math.PI, this.skyTex || undefined);
+      this.scene.background = this.skyTex;
+      this.scene.backgroundIntensity = 1;
+    } else if (this.scene.background === this.skyTex) {
+      this.scene.background = new THREE.Color(0x050506);
+    }
+    this.dirty = true;
   }
 
   syncPeople(list: PersonState[]) {
+    this.lastPeople = list;
     const ids = new Set(list.map((p) => p.id));
     for (const [id, o] of this.people) if (!ids.has(id)) { this.scene.remove(o.obj); this.people.delete(id); }
     for (const p of list) {
@@ -733,10 +1034,21 @@ export class Engine {
       // i piedi poggiano sul pavimento letto dalla foto (che può non stare esattamente a quota 0)
       const obj = this.people.get(p.id)!.obj;
       obj.position.y = p.position[1] + this.groundAt(p.position[0], p.position[2]);
+      if (!poseFigure(obj, p)) {
+        // la figura arriva poco dopo: intanto si vede il manichino
+        const model = figureModel(p);
+        if (!this.figureWait.has(model)) {
+          this.figureWait.add(model);
+          loadFigure(model).then((t) => { if (t && !this.disposed) { this.syncPeople(this.lastPeople); this.dirty = true; } });
+        }
+      }
     }
   }
+  lastPeople: PersonState[] = [];
+  figureWait = new Set<string>();
 
   groundAt(x: number, z: number) {
+    if (this.built) return 0;
     // quota del pavimento letto attorno ai piedi (mediana su una piccola griglia)
     const ys: number[] = [];
     const rc = new THREE.Raycaster();
@@ -825,21 +1137,25 @@ export class Engine {
 
   // luce indiretta stimata (sfera integratrice) per l'anteprima
   updateIndirect() {
-    if (!this.recon || !this.snapshot) return;
+    if ((!this.recon && !this.built) || !this.snapshot) return;
     const s = this.snapshot;
     const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
     let flux = 0;
     for (const L of s.lights) if (L.on) flux += effectiveLumens(L, skyLux) * (fixtureById(L.fixtureId).kind === 'spot' && L.origin !== 'finestra' ? 0.7 : 1);
     if (this.sun.visible) {
       const { dir } = sunDirection(s.sun);
-      for (const w of this.recon.windows) flux += this.sun.intensity * w.width * w.height * Math.max(0, -dir.dot(new THREE.Vector3(...w.normal))) * 0.85;
+      for (const w of this.windowList()) flux += this.sun.intensity * w.width * w.height * Math.max(0, -dir.dot(new THREE.Vector3(...w.normal))) * 0.85;
     }
-    const [x0, y0, z0] = this.recon.room.min, [x1, y1, z1] = this.recon.room.max;
-    const W = x1 - x0, H = y1 - y0, D = Math.min(z1, 0.5) - z0;
+    const [x0, y0, z0] = this.bounds.min, [x1, y1, z1] = this.bounds.max;
+    const W = x1 - x0, H = y1 - y0, D = (this.built ? z1 : Math.min(z1, 0.5)) - z0;
     const A = 2 * (W * H + W * D + H * D);
-    const rho = 0.4;
+    const rho = this.built ? builtReflectance(this.built) : 0.4;
     const E = (flux * rho) / (A * (1 - rho));
-    this.ambient.intensity = E * 0.8;
+    // stanza costruita: tarata sullo scatto in path tracing (la luce rimbalzata è meno di una sfera ideale
+    // e prende il colore del pavimento)
+    this.ambient.intensity = E * (this.built ? 0.45 : 0.8);
+    if (this.built) this.ambient.color.copy(FLOOR_TINT[this.built.floor] || new THREE.Color(1, 1, 1));
+    else this.ambient.color.setRGB(1, 1, 1);
   }
 
   // ---------------- calibrazione dell'esposizione sulla foto ----------------
@@ -888,6 +1204,69 @@ export class Engine {
     return { iso: isoSnap, fStop, shutter };
   }
 
+  // luce sul volto della persona più vicina al centro dell'inquadratura (lato più illuminato verso la camera)
+  faceLux() {
+    let best = 0, bestD = Infinity;
+    const W = this.container.clientWidth, H = this.container.clientHeight;
+    for (const o of this.people.values()) {
+      const j = (o.obj.userData.joints as Record<string, THREE.Object3D>)?.head;
+      if (!j) continue;
+      const c = j.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.08, 0));
+      const pr = this.project(c);
+      if (pr.behind || pr.x < 0 || pr.y < 0 || pr.x > W || pr.y > H) continue;
+      const d = Math.hypot(pr.x - W / 2, pr.y - H / 2);
+      if (d > bestD) continue;
+      const toCam = this.camera.position.clone().sub(c).setY(0).normalize();
+      let lux = 0;
+      for (const a of [-50, -25, 0, 25, 50]) {
+        const n = toCam.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(a));
+        const r = this.readingAt(c.clone().addScaledVector(n, 0.13), n);
+        if (r) lux = Math.max(lux, r.lux);
+      }
+      best = lux; bestD = d;
+    }
+    return best;
+  }
+
+  // esposizione automatica per l'interno (le finestre, molto più chiare, non contano)
+  autoExposure(): { iso: number; fStop: number; shutter: number } | null {
+    if (!this.snapshot) return null;
+    const w = 160, h = Math.max(2, Math.round(160 / this.camera.aspect));
+    const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType });
+    const sel = this.selBox.visible;
+    this.selBox.visible = false;
+    this.camera.updateMatrixWorld();
+    this.renderer.setRenderTarget(rt);
+    this.renderer.render(this.scene, this.camera);
+    const buf = new Float32Array(w * h * 4);
+    this.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+    this.renderer.setRenderTarget(null);
+    rt.dispose();
+    this.selBox.visible = sel;
+    const lums: number[] = [];
+    for (let i = 0; i < w * h; i++) lums.push(0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2]);
+    lums.sort((a, b) => a - b);
+    const cut = lums.slice(Math.floor(lums.length * 0.05), Math.floor(lums.length * 0.85));
+    const M = cut.reduce((a, b) => a + b, 0) / Math.max(1, cut.length);
+    if (!(M > 1e-7)) return null;
+    this.dirty = true;
+    // con una persona in quadro si espone per il volto (cartoncino grigio dal lato della chiave)
+    const face = this.built ? this.faceLux() : 0;
+    if (face > 0.5) return this.settingsFor(1.3 * Math.PI / face);
+    return this.settingsFor(0.2 / M);
+  }
+
+  settingsFor(e: number) {
+    const shutter = 1 / 50;
+    let fStop = 2.8;
+    const ev = Math.log2(1 / (1.2 * e));
+    let iso = (100 * (fStop * fStop) / shutter) / Math.pow(2, ev);
+    if (iso > 12800) { fStop = FSTOPS.filter((f) => f >= 1.4).find((f) => (100 * f * f / shutter) / Math.pow(2, ev) <= 12800) || 1.4; iso = (100 * fStop * fStop / shutter) / Math.pow(2, ev); }
+    if (iso < 100) { fStop = FSTOPS.find((f) => (100 * f * f / shutter) / Math.pow(2, ev) >= 100) || 22; iso = (100 * fStop * fStop / shutter) / Math.pow(2, ev); }
+    const isoSnap = ISO_VALUES.reduce((a, b) => (Math.abs(Math.log2(b / iso)) < Math.abs(Math.log2(a / iso)) ? b : a));
+    return { iso: isoSnap, fStop, shutter };
+  }
+
   // ---------------- vista ----------------
   resetView() {
     if (!this.homePose) return;
@@ -911,12 +1290,45 @@ export class Engine {
   }
 
   clampCamera() {
-    if (!this.recon) return;
-    const { min, max } = this.recon.room;
+    if (!this.recon && !this.built) return;
+    const { min, max } = this.bounds;
     const p = this.camera.position;
+    if (this.built) {
+      // stanza costruita: si può uscire dalla stanza (le pareti davanti alla camera spariscono)
+      const m = 9;
+      p.x = Math.min(max[0] + m, Math.max(min[0] - m, p.x));
+      p.y = Math.min(max[1] + m, Math.max(0.15, p.y));
+      p.z = Math.min(max[2] + m, Math.max(min[2] - m, p.z));
+      return;
+    }
     p.x = Math.min(max[0] - 0.15, Math.max(min[0] + 0.15, p.x));
     p.y = Math.min(max[1] - 0.1, Math.max(0.15, p.y));
     p.z = Math.min(max[2] - 0.15, Math.max(min[2] + 0.15, p.z));
+  }
+
+  // pareti "volanti": guardando da fuori, le pareti (e il soffitto) tra la camera e la stanza
+  // non si vedono e non si toccano, ma continuano a fare ombra
+  cutaway = new Set<string>();
+  updateCutaway(on: boolean) {
+    if (!this.built) return;
+    const r = this.built;
+    const p = this.camera.position;
+    const cut = new Set<string>();
+    if (on) {
+      for (const w of ['fondo', 'davanti', 'sinistra', 'destra'] as WallId[]) {
+        const f = wallFrame(r, w);
+        if (p.clone().sub(f.origin).dot(f.normal) < 0.02) cut.add(w);
+      }
+      if (p.y > r.height - 0.02) cut.add('soffitto');
+    }
+    if (cut.size === this.cutaway.size && [...cut].every((c) => this.cutaway.has(c))) return;
+    this.cutaway = cut;
+    this.room.traverse((o) => {
+      const c = o.userData.cut;
+      if (!c) return;
+      if (cut.has(c)) o.layers.set(1); else o.layers.set(0);
+    });
+    this.scene.traverse((o: any) => { if (o.isLight && o.shadow) o.shadow.camera.layers.enable(1); });
   }
 
   isHome() {
@@ -924,19 +1336,77 @@ export class Engine {
     return this.camera.position.distanceTo(this.homePose.pos) < 0.02 && this.camera.quaternion.angleTo(this.homePose.quat) < 0.01;
   }
 
+  // avanti/indietro lungo la direzione del puntatore
+  dolly(amount: number, clientX?: number, clientY?: number) {
+    let dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+    if (clientX !== undefined && clientY !== undefined) {
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(this.ndc(clientX, clientY), this.camera);
+      dir = rc.ray.direction.clone();
+    }
+    this.camera.position.addScaledVector(dir, Math.max(-1.2, Math.min(1.2, amount)));
+    this.applyLook();
+    this.dirty = true;
+  }
+
+  // rotella del mouse o pizzico sul trackpad (arriva come rotella con Ctrl)
+  wheelZoom(e: WheelEvent) {
+    if (!this.navEnabled) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const k = e.ctrlKey ? 0.02 : 0.004;
+    this.dolly(-e.deltaY * unit * k, e.clientX, e.clientY);
+  }
+
   bindNav() {
     const el = this.renderer.domElement;
-    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean } | null = null;
+    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; grab?: Grab | null } | null = null;
+    // dita sullo schermo: due dita = pizzico per avanzare/arretrare e trascinamento per spostarsi
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { d: number; x: number; y: number } | null = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()];
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    };
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerdown', (e) => {
       if (!this.navEnabled) return;
-      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey };
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          if (drag?.grab && drag.moved) drag.grab.end?.();
+          drag = null;
+          pinch = pinchState();
+          el.setPointerCapture(e.pointerId);
+          return;
+        }
+        if (touches.size > 2) return;
+      }
+      const grab = e.button === 0 ? this.onGrab?.(e) : null;
+      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, grab };
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && touches.size >= 2 && this.navEnabled) {
+          const n = pinchState();
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+          this.camera.position.addScaledVector(right, -(n.x - pinch.x) * 0.006).addScaledVector(new THREE.Vector3(0, 1, 0), (n.y - pinch.y) * 0.006);
+          this.dolly((n.d - pinch.d) * 0.009, n.x, n.y);
+          pinch = n;
+          return;
+        }
+      }
       if (!drag || !this.navEnabled) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+      if (drag.grab) {
+        if (!drag.moved) drag.grab.start?.();
+        drag.moved = true;
+        drag.grab.move(e);
+        this.dirty = true;
+        return;
+      }
       drag.moved = true;
       drag.x = e.clientX; drag.y = e.clientY;
       if (drag.btn === 2 || drag.btn === 1 || drag.shift) {
@@ -951,18 +1421,25 @@ export class Engine {
       this.dirty = true;
     });
     const end = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') {
+        touches.delete(e.pointerId);
+        if (touches.size < 2) pinch = null;
+      }
       if (drag && !drag.moved) this.onClick?.(e);
+      if (drag?.grab && drag.moved) drag.grab.end?.();
       drag = null;
     };
+    el.addEventListener('pointermove', (e) => {
+      if (drag) return;
+      const g = this.onHover?.(e);
+      el.style.cursor = g ? 'grab' : '';
+    });
     el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', () => (drag = null));
+    el.addEventListener('pointercancel', (e) => { touches.delete(e.pointerId); if (touches.size < 2) pinch = null; drag = null; });
     el.addEventListener('wheel', (e) => {
       if (!this.navEnabled) return;
       e.preventDefault();
-      const f = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      this.camera.position.addScaledVector(f, -e.deltaY * 0.004);
-      this.applyLook();
-      this.dirty = true;
+      this.wheelZoom(e);
     }, { passive: false });
     el.addEventListener('dblclick', (e) => this.onDoubleClick?.(e));
     window.addEventListener('keydown', (e) => {
@@ -975,6 +1452,8 @@ export class Engine {
   }
 
   onClick: ((e: PointerEvent) => void) | null = null;
+  onGrab: ((e: PointerEvent) => Grab | null) | null = null;
+  onHover: ((e: PointerEvent) => boolean) | null = null;
   onDoubleClick: ((e: MouseEvent) => void) | null = null;
 
   // ---------------- picking ----------------
@@ -987,7 +1466,7 @@ export class Engine {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(this.ndc(clientX, clientY), this.camera);
     (rc as any).firstHitOnly = true;
-    const list = objects || [...this.surfaces, ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)];
+    const list = objects || [...this.picks, ...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)];
     const hits = rc.intersectObjects(list, true).filter((h) => (h.object as any).visible !== false);
     if (!hits.length) return null;
     const h = hits[0];
@@ -1028,14 +1507,39 @@ export class Engine {
   measure(clientX: number, clientY: number) {
     const hit = this.raycast(clientX, clientY);
     if (!hit || !this.snapshot) return null;
+    return this.readingAt(hit.point, hit.normal);
+  }
+
+  // lettura dell'esposimetro sulla superficie dove punta una luce (tutte le luci, con le ombre)
+  aimReading(L: { position: [number, number, number]; target: [number, number, number]; attached?: string }) {
+    if (!this.snapshot) return null;
+    const from = new THREE.Vector3(...L.position), to = new THREE.Vector3(...L.target);
+    const dir = to.clone().sub(from);
+    const len = dir.length();
+    if (len < 1e-3) return null;
+    dir.normalize();
+    const rc = new THREE.Raycaster(from.clone().addScaledVector(dir, 0.08), dir, 0, len + 6);
+    (rc as any).firstHitOnly = true;
+    const own = L.attached ? this.furn.get(L.attached)?.obj : null;
+    const occ = [...this.surfaces, ...this.furnitureObjects().filter((o) => o !== own), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
+    const hit = rc.intersectObjects(occ, true).sort((a, b) => a.distance - b.distance)[0];
+    if (!hit || !hit.face) return this.readingAt(to, dir.clone().negate());
+    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    if (n.dot(dir) > 0) n.negate();
+    return this.readingAt(hit.point, n);
+  }
+
+  readingAt(point: THREE.Vector3, normal: THREE.Vector3) {
+    if (!this.snapshot) return null;
+    const hit = { point, normal };
     const s = this.snapshot;
     const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
     const p = hit.point.clone().addScaledVector(hit.normal, 0.01);
-    const occluders = [...this.surfaces, ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
+    const occluders = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
     const rc = new THREE.Raycaster();
     (rc as any).firstHitOnly = true;
     let lux = 0;
-    for (const L of s.lights) {
+    for (const L of this.resolveLights(s.lights)) {
       const e = illuminanceAt(L, p, hit.normal, skyLux);
       if (e <= 0) continue;
       const lp = new THREE.Vector3(...L.position);
@@ -1043,7 +1547,8 @@ export class Engine {
       const dist = dir.length();
       rc.set(p, dir.normalize());
       rc.far = dist - 0.05;
-      if (L.origin !== 'finestra' && rc.intersectObjects(occluders, true).length) continue;
+      const fr = (L as any).frameId ? this.props.get((L as any).frameId)?.obj : null;
+      if (L.origin !== 'finestra' && rc.intersectObjects(fr ? occluders.filter((o) => o !== fr) : occluders, true).length) continue;
       lux += e;
     }
     if (this.sun.visible) {
@@ -1089,6 +1594,7 @@ export class Engine {
     // ciò che le altre foto vedono: si mostrano solo vicino al punto di vista della prima
     if (this.fillMesh && this.recon?.extras.length && this.homePose) this.fillMesh.visible = this.camera.position.distanceTo(this.homePose.pos) < 0.35;
     this.camera.updateMatrixWorld();
+    this.updateCutaway(true);
     this.renderer.setRenderTarget(this.rt);
     this.renderer.render(this.scene, this.camera);
     this.updateRelight();
@@ -1112,14 +1618,14 @@ export class Engine {
     const rc = new THREE.Raycaster();
     rc.setFromCamera(new THREE.Vector2(0, 0), this.camera);
     (rc as any).firstHitOnly = true;
-    const h = rc.intersectObjects([...this.surfaces, ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)], true)[0];
+    const h = rc.intersectObjects([...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)], true)[0];
     return h ? Math.max(0.3, h.distance) : 3;
   }
 
   // parametri della profondità di campo; false se tutto è a fuoco
   setupDof(target: { width: number; height: number }): boolean {
     const c = this.cam;
-    if (!c || !this.recon) return false;
+    if (!c || (!this.recon && !this.built)) return false;
     const sensor = SENSORS.find((x) => x.id === c.sensor) || SENSORS[0];
     const f = c.focal, N = c.fStop;
     const S = Math.max(this.focusDistance() * 1000, f * 1.5);
@@ -1232,6 +1738,8 @@ export class Engine {
   // la stessa esposizione e lo stesso bilanciamento dell'anteprima, solo più pulito.
   async shoot(onProgress: (p: number) => void, samples = 384): Promise<HTMLCanvasElement | null> {
     if (this.shot || !this.snapshot) return null;
+    this.setViewShift(0);
+    if (this.built) return this.shootBuilt(onProgress, 600);
     const s = this.snapshot;
     const added = s.lights.filter((L) => L.on && L.origin === 'aggiunta' && effectiveLumens(L, 0) > 0);
     if (!added.length) {
@@ -1239,39 +1747,95 @@ export class Engine {
       await new Promise((r) => setTimeout(r, 30));
       return this.composeShot(null);
     }
-    const ptLights = new THREE.Group();
-    for (const L of added) {
-      const fx = fixtureById(L.fixtureId);
-      const lm = effectiveLumens(L, 0);
-      const color = lightColor(L.kelvin, L.gel);
-      const pos = new THREE.Vector3(...L.position), tgt = new THREE.Vector3(...L.target);
-      if (fx.kind === 'area') {
-        const w = L.size[0] * (1 + L.softness), h = L.size[1] * (1 + L.softness);
-        const al = new THREE.RectAreaLight(color, lm / (Math.PI * w * h), w, h);
-        al.position.copy(pos);
-        al.lookAt(tgt);
-        ptLights.add(al);
-      } else if (fx.kind === 'spot') {
-        const { beam, field } = spotAngles(L);
-        const sl = new PhysicalSpotLight(color, spotCandela(lm, beam));
-        sl.angle = THREE.MathUtils.degToRad(Math.min(170, field) / 2);
-        sl.penumbra = Math.min(1, Math.max(0.05, 1 - beam / field));
-        sl.decay = 2; sl.distance = 0;
-        sl.radius = (fx.radius || 0.05) * (1 + L.softness * 3);
-        sl.position.copy(pos);
-        const t = new THREE.Object3D(); t.position.copy(tgt); ptLights.add(t); sl.target = t;
-        ptLights.add(sl);
-      } else {
-        const pl = new THREE.PointLight(color, lm / (4 * Math.PI), 0, 2);
-        (pl as any).radius = (fx.radius || 0.03) * (1 + L.softness * 3);
-        pl.position.copy(pos);
-        ptLights.add(pl);
-      }
+    const ptLights = this.buildPtLights(added);
+    this.scene.remove(this.rasterLights);
+    this.scene.add(ptLights);
+    ptLights.updateMatrixWorld(true);
+    this.initPT();
+    this.pt.bounces = 4;
+    // solo la luce delle sorgenti aggiunte: la stanza non emette (la sua luce è già nella foto)
+    const saved: [THREE.MeshStandardMaterial, number][] = [];
+    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material), ...this.extraMats.map((x) => x.mat), ...this.boxMats.map((x) => x[0])].filter(Boolean) as THREE.MeshStandardMaterial[];
+    for (const m of roomMats) { saved.push([m, m.emissiveIntensity]); m.emissiveIntensity = 0; }
+    this.shotRestore = () => { for (const [m, ei] of saved) m.emissiveIntensity = ei; };
+    const prevBg = this.scene.background;
+    this.scene.background = new THREE.Color(0, 0, 0);
+    this.scene.environment = null;
+    return this.startPT(onProgress, samples, ptLights, prevBg);
+  }
+
+  // stanza costruita: tutta la scena in path tracing (luci, lampade, sole e cielo dalle finestre)
+  async shootBuilt(onProgress: (p: number) => void, samples: number): Promise<HTMLCanvasElement | null> {
+    const s = this.snapshot!;
+    const list = s.lights.filter((L) => L.on && L.origin !== 'finestra' && effectiveLumens(L, 0) > 0);
+    const ptLights = this.buildPtLights(list);
+    if (this.sun.visible && this.sun.intensity > 0) {
+      const d = new THREE.DirectionalLight(this.sun.color.clone(), this.sun.intensity);
+      d.position.copy(this.sun.position);
+      const t = new THREE.Object3D(); t.position.copy(this.sun.target.position);
+      ptLights.add(t); d.target = t;
+      ptLights.add(d);
     }
     this.scene.remove(this.rasterLights);
     this.scene.add(ptLights);
     ptLights.updateMatrixWorld(true);
+    this.initPT();
+    this.pt.bounces = 4;
+    // le lampadine stanno dentro la loro luce: nel path tracing la nasconderebbero
+    const hidden: THREE.Object3D[] = [];
+    for (const o of this.furn.values()) o.obj.traverse((m: any) => { if (m.userData.bulb && m.visible) { m.visible = false; hidden.push(m); } });
+    // paralumi: nel path tracing il bagliore emissivo darebbe macchie (lo trova solo per caso);
+    // il tessuto lascia invece passare un quarto della luce della lampadina, e il bagliore visibile
+    // si aggiunge alla fine come le lampadine
+    const shades: { m: THREE.MeshStandardMaterial; t: boolean; o: number }[] = [];
+    for (const o of this.furn.values()) o.obj.traverse((x: any) => {
+      if (!x.isMesh || !x.userData.glow) return;
+      const m = x.material as THREE.MeshStandardMaterial;
+      if (shades.some((q) => q.m === m)) return;
+      shades.push({ m, t: m.transparent, o: m.opacity });
+      m.userData.glowI = m.emissiveIntensity;
+      m.emissiveIntensity = 0; m.transparent = true; m.opacity = 0.75;
+    });
+    // i teli di diffusione: la loro luce è già la sorgente virtuale
+    const frameMats: THREE.MeshStandardMaterial[] = [];
+    for (const o of this.props.values()) if (o.state.kind === 'diffusore') { const m = (o.obj.getObjectByName('pannello') as THREE.Mesh).material as THREE.MeshStandardMaterial; m.emissiveIntensity = 0; frameMats.push(m); }
+    // fotografando da fuori, le pareti tra camera e stanza si tolgono (come le pareti mobili sul set)
+    this.camera.updateMatrixWorld();
+    this.updateCutaway(true);
+    // ma restano lì per la luce: invisibili solo ai raggi della camera (altrimenti il cielo entra
+    // da dove manca la parete e la stanza chiusa diventa luminosa come fuori)
+    const matte: { m: any; mat: any }[] = [];
+    this.room.traverse((m: any) => {
+      if (!m.isMesh || !m.userData.cut || !this.cutaway.has(m.userData.cut)) return;
+      if (!m.visible) { m.visible = true; m.userData.wasHidden = true; }
+      matte.push({ m, mat: m.material });
+      const c = (Array.isArray(m.material) ? m.material : [m.material]).map((x: any) => { const k = x.clone(); k.matte = true; return k; });
+      m.material = Array.isArray(m.material) ? c : c[0];
+    });
+    const selVis = this.selBox.visible;
+    this.selBox.visible = false;
+    const rigVis = this.rigs.group.visible;
+    this.rigs.group.visible = false;
+    const prevBg = this.scene.background;
+    this.scene.environment = this.skyTex;
+    this.scene.environmentIntensity = 1;
+    this.shotRestore = () => {
+      for (const m of hidden) m.visible = true;
+      for (const q of matte) {
+        (Array.isArray(q.m.material) ? q.m.material : [q.m.material]).forEach((x: any) => x.dispose());
+        q.m.material = q.mat;
+        if (q.m.userData.wasHidden) { q.m.visible = false; delete q.m.userData.wasHidden; }
+      }
+      for (const m of frameMats) m.emissiveIntensity = m.userData.glow || 0;
+      for (const q of shades) { q.m.emissiveIntensity = q.m.userData.glowI || 0; q.m.transparent = q.t; q.m.opacity = q.o; }
+      this.scene.environment = null;
+      this.selBox.visible = selVis;
+      this.rigs.group.visible = rigVis;
+    };
+    return this.startPT(onProgress, samples, ptLights, prevBg);
+  }
 
+  initPT() {
     if (!this.pt) {
       this.pt = new WebGLPathTracer(this.renderer);
       this.pt.tiles.set(2, 2);
@@ -1286,16 +1850,25 @@ export class Engine {
       this.pt.rasterizeScene = false;
     }
     this.pt.multipleImportanceSampling = true;
-    this.pt.bounces = 4;
+    // materiale "matte": invisibile alla camera ma solido per la luce (le pareti tolte per guardare dentro)
+    const ptm = (this.pt as any)._pathTracer.material;
+    if (!ptm.userData.mattePatched) {
+      const fs = ptm.fragmentShader.replace(/if \( material\.matte && state\.firstRay \) \{\s*gl_FragColor = vec4\( 0\.0 \);\s*break;\s*\}/,
+        'if ( material.matte && state.firstRay ) { ray.origin = stepRayOrigin( ray.origin, ray.direction, - surfaceHit.faceNormal, surfaceHit.dist ); continue; }');
+      if (fs === ptm.fragmentShader) console.warn('matte patch non applicata');
+      ptm.fragmentShader = fs; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
+    }
+    // leggero per la scheda video: al massimo ~0,9 megapixel calcolati (il resto lo fa il filtro
+    // del rumore e l'ingrandimento), a pezzetti piccoli così il computer resta reattivo
+    const W = this.rt.width, H = this.rt.height;
+    this.pt.renderScale = Math.min(1, Math.sqrt(900000 / Math.max(1, W * H)));
+    const px = W * H * this.pt.renderScale * this.pt.renderScale;
+    const t = px > 500000 ? 4 : px > 200000 ? 3 : 2;
+    this.pt.tiles.set(t, t);
     this.renderer.toneMapping = THREE.NoToneMapping;
-    // solo la luce delle sorgenti aggiunte: la stanza non emette (la sua luce è già nella foto)
-    const saved: [THREE.MeshStandardMaterial, number][] = [];
-    const roomMats = [this.material, this.blurMaterial, (this.room.getObjectByName('scatola') as THREE.Mesh)?.userData.backMat, ...this.panes.map((p) => p.mesh.material), ...this.extraMats.map((x) => x.mat), ...this.boxMats.map((x) => x[0])].filter(Boolean) as THREE.MeshStandardMaterial[];
-    for (const m of roomMats) { saved.push([m, m.emissiveIntensity]); m.emissiveIntensity = 0; }
-    this.shotRestore = () => { for (const [m, ei] of saved) m.emissiveIntensity = ei; };
-    const prevBg = this.scene.background;
-    this.scene.background = new THREE.Color(0, 0, 0);
-    this.scene.environment = null;
+  }
+
+  async startPT(onProgress: (p: number) => void, samples: number, ptLights: THREE.Group, prevBg: any): Promise<HTMLCanvasElement | null> {
     this.ambient.visible = false;
     try {
       await new Promise((r) => setTimeout(r, 30));
@@ -1312,20 +1885,139 @@ export class Engine {
     });
   }
 
+  buildPtLights(raw: LightState[]) {
+    const ptLights = new THREE.Group();
+    const list = this.resolveLights(raw);
+    for (const L of list) {
+      const fx = fixtureById(L.fixtureId);
+      const lm = effectiveLumens(L, 0);
+      const color = lightColor(L.kelvin, L.gel);
+      const pos = new THREE.Vector3(...L.position), tgt = new THREE.Vector3(...L.target);
+      if (fx.kind === 'area') {
+        const w = L.size[0] * (1 + L.softness), h = L.size[1] * (1 + L.softness);
+        const al = new THREE.RectAreaLight(color, lm / (Math.PI * w * h), w, h);
+        al.position.copy(pos);
+        al.lookAt(tgt);
+        ptLights.add(al);
+        // telo di diffusione: illuminato da dietro brilla anche verso la lampada (la parte riflessa)
+        if ((L as any).frameId) {
+          const back = new THREE.RectAreaLight(color, (lm * 0.4) / (Math.PI * w * h), w, h);
+          const out = tgt.clone().sub(pos).normalize();
+          back.position.copy(pos).addScaledVector(out, -0.06);
+          back.lookAt(back.position.clone().sub(out));
+          ptLights.add(back);
+        }
+      } else if (fx.kind === 'spot') {
+        const { beam, field } = spotAngles(L);
+        const sl = new PhysicalSpotLight(color, spotCandela(lm, beam));
+        sl.angle = THREE.MathUtils.degToRad(Math.min(170, field) / 2);
+        sl.penumbra = Math.min(1, Math.max(0.05, 1 - beam / field));
+        sl.decay = 2; sl.distance = 0;
+        // la diffusione sulla lente rende la sorgente grande quanto la lente
+        sl.radius = (fx.radius || 0.05) * (1 + L.softness * 3) + diffusionById(L.diffusion).spread * 0.15;
+        sl.position.copy(pos);
+        const t = new THREE.Object3D(); t.position.copy(tgt); ptLights.add(t); sl.target = t;
+        ptLights.add(sl);
+      } else {
+        const pl = new THREE.PointLight(color, lm / (4 * Math.PI), 0, 2);
+        (pl as any).radius = (fx.radius || 0.03) * (1 + L.softness * 3) + diffusionById(L.diffusion).spread * 0.08;
+        pl.position.copy(pos);
+        ptLights.add(pl);
+      }
+    }
+    return ptLights;
+  }
+
   tickShot() {
     const sh = this.shot!;
     this.pt.renderSample();
     const smp = this.pt.samples;
     const elapsed = (performance.now() - sh.start) / 1000;
-    const cap = Number(new URLSearchParams(location.search).get('cap')) || 120;
+    const cap = Number(new URLSearchParams(location.search).get('cap')) || (this.built ? 45 : 120);
     const p = Math.min(1, Math.max(smp / sh.target, elapsed / cap));
     (window as any).__ptSamples = smp;
     sh.onProgress(Math.min(0.99, p));
     if (p >= 1) {
-      const add = this.readAdded();
+      const add = this.built ? this.denoisedShot() : this.readAdded();
       const resolve = sh.resolve;
       this.finishShot(sh.ptLights, (sh as any).prevBg);
       resolve(this.composeShot(add));
+    }
+  }
+
+  // stanza costruita: path tracing ripulito dal rumore con l'aiuto di colore, normali e distanze
+  denoisedShot(): THREE.Texture | null {
+    let restoreMattes = () => {};
+    try {
+      const tgt = this.pt.target as THREE.WebGLRenderTarget;
+      const W = tgt.width, H = tgt.height;
+      if (!W || !H) return null;
+      const mk = () => new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, colorSpace: THREE.LinearSRGBColorSpace });
+      const alb = mk(), nrm = mk(), dist = mk();
+      const prevBg = this.scene.background, prevEnv = this.scene.environment, prevOv = this.scene.overrideMaterial;
+      const prevClear = this.renderer.getClearColor(new THREE.Color()), prevAlpha = this.renderer.getClearAlpha();
+      this.scene.background = null; this.scene.environment = null;
+      this.camera.updateMatrixWorld();
+      // le pareti "matte" (tolte per guardare dentro) non si vedono neanche qui
+      const mattes: THREE.Object3D[] = [];
+      this.scene.traverse((o: any) => { if (o.isMesh && o.visible && o.material?.matte) { o.visible = false; mattes.push(o); } });
+      restoreMattes = () => { for (const o of mattes) o.visible = true; };
+      // colore delle superfici
+      const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
+      const basics: THREE.Material[] = [];
+      this.scene.traverse((o: any) => {
+        if (!o.isMesh || Array.isArray(o.material)) return;
+        const m = o.material as THREE.MeshStandardMaterial;
+        const b = new THREE.MeshBasicMaterial({ color: m.color ? m.color.clone() : new THREE.Color(1, 1, 1), map: m.map || null, side: m.side, visible: m.visible });
+        if (m.emissiveIntensity > 0 && !m.map && (m.color?.r ?? 1) > 0.8) b.color.setRGB(1, 1, 1);
+        swapped.push([o, o.material]); basics.push(b);
+        o.material = b;
+      });
+      this.renderer.setClearColor(new THREE.Color(1, 1, 1), 1);
+      this.renderer.setRenderTarget(alb); this.renderer.render(this.scene, this.camera);
+      for (const [o, m] of swapped) o.material = m;
+      basics.forEach((b) => b.dispose());
+      // sorgenti visibili che il path tracing non vede direttamente (lampadine, teli di diffusione illuminati)
+      const emit = mk();
+      const swapped2: [THREE.Mesh, THREE.Material | THREE.Material[], boolean][] = [];
+      const black = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      const emitMats: THREE.Material[] = [black];
+      this.scene.traverse((o: any) => {
+        if (!o.isMesh || Array.isArray(o.material)) return;
+        const m = o.material as THREE.MeshStandardMaterial;
+        const wasVis = o.visible;
+        let mat: THREE.Material = black;
+        if (o.userData.bulb) { o.visible = true; mat = new THREE.MeshBasicMaterial({ color: m.emissive.clone().multiplyScalar(m.emissiveIntensity) }); emitMats.push(mat); }
+        else if (o.userData.glow && m.userData?.glowI) { mat = new THREE.MeshBasicMaterial({ color: m.emissive.clone().multiplyScalar(m.userData.glowI) }); emitMats.push(mat); }
+        else if (o.parent?.userData?.propId && o.name === 'pannello' && m.userData?.glow) { mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 1, 1).multiplyScalar(m.userData.glow), side: THREE.DoubleSide }); emitMats.push(mat); }
+        swapped2.push([o, o.material, wasVis]);
+        o.material = mat;
+      });
+      this.renderer.setClearColor(new THREE.Color(0, 0, 0), 1);
+      this.renderer.setRenderTarget(emit); this.renderer.render(this.scene, this.camera);
+      for (const [o, m, v] of swapped2) { o.material = m; o.visible = v; }
+      emitMats.forEach((b) => b.dispose());
+      // normali e distanze
+      const nm = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
+      this.scene.overrideMaterial = nm;
+      this.renderer.setClearColor(new THREE.Color(0.5, 0.5, 1), 1);
+      this.renderer.setRenderTarget(nrm); this.renderer.render(this.scene, this.camera);
+      this.scene.overrideMaterial = this.distMat;
+      this.renderer.setClearColor(new THREE.Color(1000, 0, 0), 1);
+      this.renderer.setRenderTarget(dist); this.renderer.render(this.scene, this.camera);
+      nm.dispose();
+      restoreMattes();
+      this.scene.overrideMaterial = prevOv; this.scene.background = prevBg; this.scene.environment = prevEnv;
+      this.renderer.setClearColor(prevClear, prevAlpha);
+      const out = denoise(this.renderer, tgt.texture, alb.texture, nrm.texture, dist.texture, W, H, emit.texture, this.pt.samples);
+      alb.dispose(); nrm.dispose(); dist.dispose(); emit.dispose();
+      this.tmpRT = out;
+      return out.texture;
+    } catch (e) {
+      console.warn(e);
+      restoreMattes();
+      this.renderer.setRenderTarget(null);
+      return this.readAdded();
     }
   }
 
@@ -1350,11 +2042,12 @@ export class Engine {
   }
 
   // compone lo scatto: anteprima senza le luci aggiunte + luci aggiunte in path tracing
-  composeShot(add: THREE.DataTexture | null): HTMLCanvasElement | null {
+  composeShot(add: THREE.Texture | null): HTMLCanvasElement | null {
     const s = this.snapshot;
     if (!s) return null;
     const hidden: THREE.Light[] = [];
-    if (add) {
+    const builtPT = !!(this.built && add);
+    if (add && !builtPT) {
       for (const o of this.lightObjs.values()) if (o.state.origin === 'aggiunta' && o.raster.visible) { o.raster.visible = false; hidden.push(o.raster); }
       // luce indiretta stimata solo dalle luci rimaste (quella delle aggiunte è nel path tracing)
       this.snapshot = { ...s, lights: s.lights.filter((L) => L.origin !== 'aggiunta') };
@@ -1367,10 +2060,15 @@ export class Engine {
     let canvas: HTMLCanvasElement | null = null;
     try {
       this.camera.updateMatrixWorld();
-      this.renderer.setRenderTarget(this.rt);
-      this.renderer.render(this.scene, this.camera);
-      this.updateRelight();
-      u.tAdd.value = add; u.addW.value = add ? 1 : 0;
+      if (builtPT) {
+        // l'immagine è tutta nel path tracing
+        u.tDiffuse.value = add;
+      } else {
+        this.renderer.setRenderTarget(this.rt);
+        this.renderer.render(this.scene, this.camera);
+        this.updateRelight();
+        u.tAdd.value = add; u.addW.value = add ? 1 : 0;
+      }
       const prevMask = u.maskAlpha.value; u.maskAlpha.value = 1;
       const prevFc = u.falseColor.value; u.falseColor.value = 0;
       this.present(out);
@@ -1397,9 +2095,10 @@ export class Engine {
       this.renderer.setRenderTarget(null);
       out.dispose();
       u.tAdd.value = null; u.addW.value = 0;
-      add?.dispose();
+      u.tDiffuse.value = this.rt.texture;
+      if (this.tmpRT) { this.tmpRT.dispose(); this.tmpRT = null; } else add?.dispose();
       for (const l of hidden) l.visible = true;
-      if (add) this.updateIndirect();
+      if (add && !builtPT) this.updateIndirect();
       this.dirty = true;
     }
     return canvas;
@@ -1595,7 +2294,7 @@ function buildProp(p: PropState) {
   g.userData.propId = p.id;
   let mat: THREE.Material;
   if (p.kind === 'bianco') mat = new THREE.MeshStandardMaterial({ color: 0xf2f2ef, roughness: 1, side: THREE.DoubleSide });
-  else if (p.kind === 'diffusore') mat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, transmission: 1, thickness: 0.001, ior: 1.2, side: THREE.DoubleSide, transparent: true, opacity: 0.55 });
+  else if (p.kind === 'diffusore') mat = new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 1, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
   else mat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.95, side: THREE.DoubleSide });
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
   panel.name = 'pannello';
@@ -1609,4 +2308,16 @@ function buildProp(p: PropState) {
   pole.userData.propId = p.id;
   g.add(pole);
   return g;
+}
+
+// riflettanza media della stanza costruita (per la luce indiretta stimata dell'anteprima)
+const WALL_RHO: Record<string, number> = { bianco: 0.72, grigio: 0.42, sabbia: 0.55, salvia: 0.36, terracotta: 0.2, notte: 0.05, nero: 0.03, mattoni: 0.18 };
+const FLOOR_RHO: Record<string, number> = { rovere: 0.35, noce: 0.1, cemento: 0.3, piastrelle: 0.6, marmo: 0.7, moquette: 0.15 };
+const FLOOR_TINT: Record<string, THREE.Color> = {
+  rovere: new THREE.Color(1.08, 0.97, 0.85), noce: new THREE.Color(1.06, 0.97, 0.9), moquette: new THREE.Color(1, 1, 1),
+  cemento: new THREE.Color(1, 1, 0.98), piastrelle: new THREE.Color(1.02, 1, 0.97), marmo: new THREE.Color(1, 1, 1),
+};
+function builtReflectance(r: RoomSpec) {
+  const Aw = 2 * (r.width + r.depth) * r.height, Af = r.width * r.depth;
+  return Math.min(0.75, ((WALL_RHO[r.wall] ?? 0.5) * Aw + (FLOOR_RHO[r.floor] ?? 0.3) * Af + 0.78 * Af) / (Aw + 2 * Af));
 }

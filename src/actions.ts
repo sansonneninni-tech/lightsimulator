@@ -5,6 +5,8 @@ import { eng } from './engineRef';
 import { makeLight, FIXTURES, newId, fixtureById, illuminanceAt } from './engine/photometry';
 import { PersonState, PoseId, poseJoints, POSES } from './engine/mannequin';
 import { PROP_KINDS } from './engine/Engine';
+import { roomBounds } from './engine/room';
+import { removeFurniture, removeOpening } from './build';
 
 export const TYPE_FIXTURE: Record<string, string> = {
   Pannello: 'panel-120x60',
@@ -21,7 +23,9 @@ export const familyType = (fixtureId: string) => {
 export const fixturesOfType = (type: string) => FIXTURES.filter((f) => familyType(f.id) === type);
 
 function room() {
-  const r = useStore.getState().recon;
+  const s = useStore.getState();
+  if (s.room) return roomBounds(s.room);
+  const r = s.recon;
   return r ? r.room : { min: [-3, 0, -5], max: [3, 2.8, 2] };
 }
 
@@ -30,6 +34,16 @@ export function clampToRoom(p: THREE.Vector3, margin = 0.15) {
   p.x = Math.min(max[0] - margin, Math.max(min[0] + margin, p.x));
   p.y = Math.min(max[1] - margin, Math.max(0.1, p.y));
   p.z = Math.min(max[2] - margin, Math.max(min[2] + margin, p.z));
+  return p;
+}
+
+// le luci si possono mettere ovunque: dentro, sopra, fuori dalla finestra (fino a 9 m dalla stanza)
+export function clampFree(p: THREE.Vector3) {
+  const { min, max } = room();
+  const m = 9;
+  p.x = Math.min(max[0] + m, Math.max(min[0] - m, p.x));
+  p.y = Math.min(max[1] + 6, Math.max(0.05, p.y));
+  p.z = Math.min(max[2] + m, Math.max(min[2] - m, p.z));
   return p;
 }
 
@@ -82,10 +96,14 @@ export function addLight(type: string, at?: THREE.Vector3) {
     // compare dentro la vista, nel terzo superiore centrale, già puntata sul soggetto
     const r = e.renderer.domElement.getBoundingClientRect();
     const d = camPos.distanceTo(subject);
-    const ray = e.rayPlane(r.left + r.width * (0.5 + side * 0.12), r.top + r.height * 0.28, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(0.9, Math.min(d - 0.8, d * 0.55)))));
+    const ray = e.rayPlane(r.left + r.width * (0.5 + side * 0.12), r.top + r.height * 0.4, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(0.9, Math.min(d - 0.8, d * 0.55)))));
     if (ray) pos = ray;
   }
-  clampToRoom(pos, 0.3);
+  // nasce dentro la stanza, all'altezza di uno stativo, mai attaccata al soffitto
+  const inside = (() => { const { min, max } = room(); return camPos.x > min[0] && camPos.x < max[0] && camPos.z > min[2] && camPos.z < max[2]; })();
+  if (inside || !at) clampToRoom(pos, 0.4);
+  const top = room().max[1];
+  pos.y = Math.max(fx.kind === 'point' ? 1.0 : 1.2, Math.min(pos.y, top - 0.6, 2.3));
   const num = s.lights.filter((l) => familyType(l.fixtureId) === type && l.origin !== 'finestra').length + 1;
   const L = makeLight(fixtureId, pos.toArray() as any, subject.toArray() as any, { name: `${type} ${num}` });
   if (fx.kind === 'point') L.kelvin = 3200;
@@ -145,11 +163,31 @@ export function addProp(kind: PropState['kind']) {
   const camPos = e ? e.camera.position.clone() : new THREE.Vector3(0, 1.6, 0);
   const toCam = camPos.clone().sub(subject); toCam.y = 0; toCam.normalize();
   const side = toCam.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(kind === 'bianco' ? -70 : 60));
-  const pos = subject.clone().addScaledVector(side, 1.2);
+  let pos = subject.clone().addScaledVector(side, 1.2);
   pos.y = kind === 'diffusore' ? 2.0 : 1.3;
   clampToRoom(pos, 0.3);
-  const face = subject.clone().sub(pos); face.y = 0;
+  let face = subject.clone().sub(pos); face.y = 0;
   const k = PROP_KINDS.find((p) => p.id === kind)!;
+  // la bandiera nasce davanti a una luce (quella scelta o la più forte) e ne taglia metà fascio;
+  // il telaio di diffusione nasce davanti alla luce e la copre tutta
+  if (kind === 'bandiera' || kind === 'diffusore') {
+    const selL = s.selection?.type === 'light' ? s.lights.find((l) => l.id === s.selection!.id) : null;
+    const cands = s.lights.filter((l) => l.on && l.origin !== 'finestra' && !l.attached);
+    const L = selL && selL.origin !== 'finestra' && !selL.attached ? selL : cands.sort((a, b) => b.stops - a.stops)[0];
+    if (L) {
+      const lp = new THREE.Vector3(...L.position), lt = new THREE.Vector3(...L.target);
+      const dir = lt.clone().sub(lp).normalize();
+      const d = Math.min(kind === 'bandiera' ? 0.9 : 1.1, lp.distanceTo(lt) * 0.4);
+      pos = lp.clone().addScaledVector(dir, d);
+      if (kind === 'bandiera') {
+        const perp = new THREE.Vector3(-dir.z, 0, dir.x);
+        if (perp.lengthSq() < 1e-4) perp.set(1, 0, 0);
+        pos.addScaledVector(perp.normalize(), k.size[0] / 2);
+      }
+      face = dir.clone().negate(); face.y = 0;
+      if (face.lengthSq() < 1e-4) face.set(0, 0, 1);
+    }
+  }
   const P: PropState = {
     id: newId('o'), kind, position: pos.toArray() as any, rotationY: THREE.MathUtils.radToDeg(Math.atan2(face.x, face.z)),
     tilt: kind === 'diffusore' ? -30 : 0, size: [...k.size] as [number, number],
@@ -163,8 +201,11 @@ export function removeSelection() {
   const sel = s.selection;
   if (!sel) return;
   s.snapshot();
+  if (sel.type === 'furniture') { removeFurniture(sel.id); s.showToast('Arredo rimosso. Cmd+Z per riaverlo.'); return; }
+  if (sel.type === 'opening') { removeOpening(sel.id); s.showToast('Apertura rimossa. Cmd+Z per riaverla.'); return; }
   if (sel.type === 'light') {
     const L = s.lights.find((l) => l.id === sel.id);
+    if (L?.attached) { removeFurniture(L.attached); s.showToast('Lampada rimossa. Cmd+Z per riaverla.'); return; }
     useStore.setState({ lights: s.lights.filter((l) => l.id !== sel.id), selection: null });
     s.showToast(`${L?.name || 'Luce'} rimossa. Cmd+Z per riaverla.`);
   } else if (sel.type === 'person') {

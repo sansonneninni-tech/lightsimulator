@@ -1,3 +1,4 @@
+import { poseJoints } from './engine/mannequin';
 import { useEffect, useRef, useState } from 'react';
 import { useStore, Shot } from './store';
 import { Engine } from './engine/Engine';
@@ -7,11 +8,15 @@ import { SelectionCard } from './ui/Cards';
 import { LightsPanel, PeoplePanel, CameraPanel, SkyPanel, PlaceMenu, PanelId } from './ui/Panels';
 import { Roll, Viewer } from './ui/Viewer';
 import { loadPhotos, saveProject, openProject, loadSample, snapshotOf } from './project';
-import { addLightAtScreen, addLight, removeSelection } from './actions';
+import { addLightAtScreen, addLight, removeSelection, clampToRoom } from './actions';
+import { Start, RoomPanel, FurnitureCard, OpeningCard } from './ui/Room';
+import { moveFurniture, updateOpening, autoExpose } from './build';
+import { wallFrame } from './engine/room';
 import { fmtHour, WEATHER } from './engine/sun';
 import { fmtStop } from './engine/photometry';
 import { newId } from './engine/photometry';
 import * as THREE from 'three';
+import { shootOnce } from './shoot';
 
 const FC_LEGEND: [string, string][] = [['#730f99', 'Nero'], ['#1a40f2', '−4'], ['#3fbf3f', '18%'], ['#f28cad', 'Pelle'], ['#ffe61a', '+3'], ['#f21a1a', 'Bruciato']];
 
@@ -43,9 +48,80 @@ export default function App() {
     ref.engine = e;
     (window as any).__engine = e;
     (window as any).__store = useStore;
+    (window as any).__actions = { addLight, poseJoints, closeAll: () => { const r = useStore.getState().room; r?.openings.forEach((o) => { if (o.kind !== 'porta') updateOpening(o.id, { closed: true }); }); } };
     const unsub = useStore.subscribe((s, p) => {
-      if (s.lights !== p.lights || s.people !== p.people || s.props !== p.props || s.sun !== p.sun || s.cam !== p.cam || s.ambient !== p.ambient) e.apply(snapshotOf());
+      if (s.lights !== p.lights || s.people !== p.people || s.props !== p.props || s.sun !== p.sun || s.cam !== p.cam || s.ambient !== p.ambient || s.room !== p.room || s.furniture !== p.furniture) e.apply(snapshotOf());
+      if (s.selection !== p.selection || s.furniture !== p.furniture) e.setSelected(s.selection?.type === 'furniture' || s.selection?.type === 'opening' ? s.selection.id : null);
     });
+    const idOf = (o: THREE.Object3D | null | undefined, key: string): string | null => {
+      while (o) { if (o.userData?.[key]) return o.userData[key]; o = o.parent; }
+      return null;
+    };
+    // mobili e persone si trascinano direttamente; le aperture dopo averle scelte
+    // (trascinando sul resto si gira lo sguardo)
+    const grabTarget = (ev: PointerEvent) => {
+      const s = useStore.getState();
+      if (s.phase !== 'ready' || s.meter || s.manikin) return null;
+      const hit = e.raycast(ev.clientX, ev.clientY);
+      if (!hit) return null;
+      const fid = s.room ? idOf(hit.object, 'furnitureId') : null;
+      if (fid) return { sel: { type: 'furniture' as const, id: fid }, hit };
+      const pid = idOf(hit.object, 'personId');
+      if (pid) return { sel: { type: 'person' as const, id: pid }, hit };
+      const sel = s.selection;
+      if (!s.room || sel?.type !== 'opening') return null;
+      const id = idOf(hit.object, 'openingId');
+      return id === sel.id ? { sel, hit } : null;
+    };
+    e.onHover = (ev) => !!grabTarget(ev);
+    e.onGrab = (ev) => {
+      const g = grabTarget(ev);
+      if (!g) return null;
+      const s = useStore.getState();
+      const pick = () => { const st = useStore.getState(); st.snapshot(); if (st.selection?.id !== g.sel.id) useStore.setState({ selection: g.sel, manikin: null }); };
+      if (g.sel.type === 'furniture') {
+        const f = s.furniture.find((x) => x.id === g.sel.id)!;
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -g.hit.point.y);
+        const ox = f.position[0] - g.hit.point.x, oz = f.position[2] - g.hit.point.z;
+        return {
+          start: pick,
+          move: (m) => {
+            const p = e.rayPlane(m.clientX, m.clientY, plane);
+            if (!p || p.distanceTo(e.camera.position) > 40) return;
+            moveFurniture(f.id, { position: [p.x + ox, f.position[1], p.z + oz] });
+          },
+        };
+      }
+      if (g.sel.type === 'person') {
+        const P = s.people.find((x) => x.id === g.sel.id)!;
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -g.hit.point.y);
+        const ox = P.position[0] - g.hit.point.x, oz = P.position[2] - g.hit.point.z;
+        return {
+          start: pick,
+          move: (m) => {
+            const p = e.rayPlane(m.clientX, m.clientY, plane);
+            if (!p || p.distanceTo(e.camera.position) > 40) return;
+            const q = clampToRoom(new THREE.Vector3(p.x + ox, 0, p.z + oz), 0.3);
+            useStore.getState().updatePerson(P.id, { position: [q.x, P.position[1], q.z] });
+          },
+        };
+      }
+      const o = s.room!.openings.find((x) => x.id === g.sel.id)!;
+      const fr = wallFrame(s.room!, o.wall);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(fr.normal, fr.origin);
+      const u0 = g.hit.point.clone().sub(fr.origin).dot(fr.right), v0 = g.hit.point.y;
+      return {
+        start: () => useStore.getState().snapshot(),
+        move: (m) => {
+          const p = e.rayPlane(m.clientX, m.clientY, plane);
+          if (!p) return;
+          const u = p.clone().sub(fr.origin).dot(fr.right);
+          const patch: any = { offset: o.offset + (u - u0) };
+          if (o.kind === 'finestra') patch.sill = Math.max(0.2, o.sill + (p.y - v0));
+          updateOpening(o.id, patch);
+        },
+      };
+    };
     e.onClick = (ev) => {
       const s = useStore.getState();
       setPanel(null);
@@ -61,6 +137,8 @@ export default function App() {
       while (o) {
         if (o.userData?.personId) { useStore.setState({ selection: { type: 'person', id: o.userData.personId } }); return; }
         if (o.userData?.propId) { useStore.setState({ selection: { type: 'prop', id: o.userData.propId } }); return; }
+        if (o.userData?.furnitureId) { useStore.setState({ selection: { type: 'furniture', id: o.userData.furnitureId }, manikin: null }); return; }
+        if (o.userData?.openingId) { useStore.setState({ selection: { type: 'opening', id: o.userData.openingId }, manikin: null }); return; }
         o = o.parent;
       }
       useStore.setState({ selection: null, manikin: null });
@@ -104,7 +182,12 @@ export default function App() {
       if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(); return; }
       if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); projRef.current?.click(); return; }
       if (s.phase !== 'ready') return;
-      if (e.code === 'Space' && !e.repeat) { e.preventDefault(); useStore.setState({ showOriginal: true }); return; }
+      if (e.code === 'Space' && !e.repeat && s.photos.length) { e.preventDefault(); useStore.setState({ showOriginal: true }); return; }
+      if (e.key.toLowerCase() === 'r' && !mod && s.selection?.type === 'furniture') {
+        const f = s.furniture.find((x) => x.id === s.selection!.id);
+        if (f) { s.snapshot(); moveFurniture(f.id, { rotationY: (f.rotationY + (e.shiftKey ? 90 : 270)) % 360 }); }
+        return;
+      }
       if (e.key === 'Escape') {
         if (s.shooting) { eng()?.cancelShot(); return; }
         setPanel(null); useStore.setState({ selection: null, manikin: null, meter: false, meterPin: null }); return;
@@ -144,31 +227,16 @@ export default function App() {
       const files = [...(e.dataTransfer?.files || [])];
       const proj = files.find((f) => f.name.endsWith('.luce'));
       if (proj) { openProject(proj); return; }
-      if (files.length && useStore.getState().phase !== 'working') loadPhotos(files);
+      // il caricamento delle foto è messo da parte per ora: si costruisce la stanza a mano
+      if (files.length) useStore.getState().showToast('Per ora la stanza si costruisce a mano: scegli un modello. Qui si aprono i progetti .luce.');
     };
     addEventListener('dragover', dragover); addEventListener('dragleave', leave); addEventListener('drop', drop);
     return () => { removeEventListener('dragover', dragover); removeEventListener('dragleave', leave); removeEventListener('drop', drop); };
   }, []);
 
   const shoot = async () => {
-    const e = eng();
-    const s = useStore.getState();
-    if (!e || s.phase !== 'ready') return;
-    if (s.shooting) { e.cancelShot(); return; }
-    setPanel(null);
-    useStore.setState({ shooting: 0.001, selection: null, manikin: null, meterPin: null });
-    e.navEnabled = false;
-    const canvas = await e.shoot((p) => useStore.setState({ shooting: Math.max(0.001, p) }));
-    e.navEnabled = true;
-    useStore.setState({ shooting: 0 });
-    if (!canvas) { s.showToast('Scatto annullato.'); return; }
-    const url = canvas.toDataURL('image/jpeg', 0.92);
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion);
-    const fr = e.frameRect;
-    const hfov = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(e.camera.fov) / 2) * e.camera.aspect * (fr.x1 - fr.x0));
-    const shot: Shot & any = { id: newId('s'), url, width: canvas.width, height: canvas.height, scene: snapshotOf(), createdAt: Date.now(), camPos: e.camera.position.toArray(), camDir: fwd.toArray(), hfov };
-    useStore.setState({ shots: [...useStore.getState().shots, shot] });
-    useStore.getState().showToast('Scatto salvato nel rullino, con lo stato di tutte le luci.');
+    if (!useStore.getState().shooting) setPanel(null);
+    await shootOnce();
   };
 
   // posizione della foto originale (Spazio): stessa apertura verticale della foto
@@ -195,14 +263,7 @@ export default function App() {
         </>
       )}
 
-      <div id="drop" className={`${phase !== 'empty' ? 'hide' : ''} ${over ? 'over' : ''}`}>
-        <div className="ring" onClick={() => fileRef.current?.click()}>
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.2"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></svg>
-        </div>
-        <h1 onClick={() => fileRef.current?.click()}>Trascina qui la foto del luogo</h1>
-        <p>Una basta: ricostruisco la stanza e trovo le luci. Con più foto dello stesso luogo la stanza è più completa.</p>
-        <button className="alt" onClick={() => loadSample()}>Oppure prova con una stanza di esempio</button>
-      </div>
+      {phase === 'empty' && <Start onOpen={() => projRef.current?.click()} />}
       <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) loadPhotos(f); }} />
       <input ref={projRef} type="file" accept=".luce,application/json" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) openProject(f); }} />
 
@@ -218,6 +279,11 @@ export default function App() {
             {sun.enabled ? `${fmtHour(sun.hour)} · ${WEATHER.find((w) => w.id === sun.weather)?.name}` : 'Luce naturale spenta'}
           </button>
           <div id="dock" className="glass chrome">
+            {useStore.getState().room && (
+              <button className={`dbtn ${panel === 'room' ? 'on' : ''}`} onClick={() => setPanel(panel === 'room' ? null : 'room')}>
+                <svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6v10H3z" /><path d="M9 20v-6h6v6" /></svg><span className="t">Stanza</span>
+              </button>
+            )}
             <button className={`dbtn ${panel === 'lights' ? 'on' : ''}`} onClick={() => setPanel(panel === 'lights' ? null : 'lights')}>
               <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="5" /><path d="M10 18h4M10.5 21h3" /></svg><span className="t">Luci</span>
             </button>
@@ -237,15 +303,16 @@ export default function App() {
           {cam.falseColor ? (
             <div id="legend" className="glass chrome">{FC_LEGEND.map(([c, n]) => <span key={n}><i style={{ background: c }} />{n}</span>)}</div>
           ) : help && (
-            <div id="help" className="chrome">Trascina per guardarti intorno · rotella o W A S D per muoverti<br />Trascina un punto per spostare la luce · l'anello in verticale per l'intensità<br />Spazio: foto originale · Doppio clic: nuova luce · Cmd+Z: annulla</div>
+            <div id="help" className="chrome">Trascina per guardarti intorno · rotella o pizzico per avvicinarti e allontanarti (anche fuori dalla stanza)<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · F: vista iniziale</div>
           )}
           <Roll />
           <SelectionCard />
+          {panel === 'room' && <RoomPanel onClose={() => setPanel(null)} />}
           {panel === 'lights' && <LightsPanel onClose={() => setPanel(null)} />}
           {panel === 'people' && <PeoplePanel onClose={() => setPanel(null)} />}
           {panel === 'camera' && <CameraPanel onClose={() => setPanel(null)} />}
           {panel === 'sky' && <SkyPanel onClose={() => setPanel(null)} />}
-          {panel === 'place' && <PlaceMenu onClose={() => setPanel(null)} onNew={() => fileRef.current?.click()} onSave={saveProject} onOpen={() => projRef.current?.click()} />}
+          {panel === 'place' && <PlaceMenu onClose={() => setPanel(null)} onNew={() => useStore.setState({ phase: 'empty', selection: null, manikin: null })} onSave={saveProject} onOpen={() => projRef.current?.click()} />}
           <Viewer />
         </>
       )}

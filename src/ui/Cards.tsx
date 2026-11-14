@@ -13,6 +13,8 @@ import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection 
 import { stopsLabel, luxAtTarget } from '../export/exports';
 import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
+import { FurnitureCard, OpeningCard } from './Room';
+import { updateOpening } from '../build';
 
 const MAIN_GELS = ['none', 'cto-quarter', 'cto-half', 'cto-full', 'ctb-half', 'ctb-full', 'plus-green', 'minus-green'];
 
@@ -39,8 +41,9 @@ export function LightCard({ id }: { id: string }) {
   const fx = fixtureById(L.fixtureId);
   const win = L.origin === 'finestra';
   const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
-  const lux = luxAtTarget(L, skyLux);
-  const fs = fStopForLux(lux, cam.shutter, cam.iso);
+  // lettura vera sulla superficie dove punta la luce: tutte le luci, l'angolo e le ombre
+  const rd = !win && L.on ? eng()?.aimReading(L) : null;
+  const over = rd ? rd.stops : 0;
   const up = (p: any) => st().updateLight(id, p);
   const snap = () => st().snapshot();
   const type = familyType(L.fixtureId);
@@ -48,11 +51,21 @@ export function LightCard({ id }: { id: string }) {
   const [kMin, kMax] = fx.kelvinRange || [1800, 10000];
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{L.name}</span><div className={`toggle ${L.on ? 'on' : ''}`} title="Accesa" onClick={() => { snap(); up({ on: !L.on }); }} /></h3>
+      <h3><span>{L.name}</span><div className={`toggle ${L.on ? 'on' : ''}`} title={win && L.windowId && st().room ? 'Aperta (spegni per chiudere l\'oscurante)' : 'Accesa'} onClick={() => {
+        // finestra di una stanza costruita: spegnere vuol dire chiudere l'oscurante (vale anche nello scatto)
+        if (win && L.windowId && st().room) { updateOpening(L.windowId, { closed: true }, true); useStore.setState({ selection: null }); st().showToast('Oscurante chiuso: da questa finestra non entra più luce. Toccala per riaprirla.'); return; }
+        snap(); up({ on: !L.on });
+      }} /></h3>
       <div className="row">
-        <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)} · ${Math.round(lux)} lux`}</b></div>
-        <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => up({ stops: +e.target.value })} />
-        {!win && L.on && <div className="hint num" style={{ marginTop: 8 }}>Sul soggetto: f/{fmtStop(fs)} a ISO {cam.iso}, {fmtShutter(cam.shutter)} · {fs > cam.fStop ? `${(Math.log2(fs / cam.fStop) * 2).toFixed(1)} stop sopra` : `${(Math.log2(cam.fStop / Math.max(fs, 0.01)) * 2).toFixed(1)} stop sotto`} il diaframma</div>}
+        <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)}${L.stops > 0.01 ? ' oltre il pieno' : L.stops < -0.01 ? ` · ${Math.max(1, Math.round(Math.pow(2, L.stops) * 100))}%` : ' · pieno'}`}</b></div>
+        <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => {
+          const v = +e.target.value;
+          // le finestre di una stanza costruita condividono il filtro (sole e cielo sono uno solo)
+          if (win && st().room) useStore.setState({ lights: st().lights.map((x) => (x.origin === 'finestra' ? { ...x, stops: v } : x)) });
+          else up({ stops: v });
+        }} />
+        {win && st().room && <div className="hint" style={{ marginTop: 8 }}>Vale per tutte le finestre, come un filtro ND sui vetri: abbassa sole e cielo insieme, anche nello scatto. L'interruttore chiude l'oscurante.</div>}
+        {rd && <div className="hint num" style={{ marginTop: 8 }}>Dove punta: {Math.round(rd.lux).toLocaleString('it-IT')} lux, {Math.abs(over) < 0.05 ? 'esposto giusto' : `${Math.abs(over).toFixed(1)} stop ${over > 0 ? 'sopra' : 'sotto'}`} a f/{fmtStop(cam.fStop)}, ISO {cam.iso}{over > 2.5 ? ' · lì è bruciato' : over < -3 ? ' · lì è quasi nero' : ''}</div>}
       </div>
       {!win && (
         <div className="row">
@@ -63,6 +76,12 @@ export function LightCard({ id }: { id: string }) {
               <button key={g} className={`chip ${L.gel === g ? 'on' : ''}`} onClick={() => { snap(); up({ gel: g }); }}>{GELS.find((x) => x.id === g)!.name}</button>
             ))}
           </div>
+        </div>
+      )}
+      {!win && !L.attached && (
+        <div className="row">
+          <div className="k"><span>Altezza</span><b className="num">{L.position[1].toFixed(2)} m</b></div>
+          <input type="range" min={0.1} max={Math.max(4, (useStore.getState().room?.height || 2.8) + 4)} step={0.05} value={L.position[1]} onPointerDown={snap} onChange={(e) => up({ position: [L.position[0], +e.target.value, L.position[2]] })} />
         </div>
       )}
       {!win && (
@@ -123,9 +142,9 @@ export function LightCard({ id }: { id: string }) {
               </div>
             </div>
           )}
-          <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>
-          <div className="hint">Trascina il punto per spostarla (Alt per l'altezza), il mirino per puntarla, l'anello in verticale per l'intensità. Rotella: Kelvin.</div>
-          {!win && <><div className="hr" /><button className="more danger" onClick={removeSelection}>Rimuovi luce</button></>}
+          {(win || L.attached) && <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>}
+          <div className="hint">Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin.</div>
+          {!win && <><div className="hr" /><button className="more danger" onClick={removeSelection}>{L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'}</button></>}
         </div>
       )}
     </Pop>
@@ -145,6 +164,10 @@ export function PersonCard({ id }: { id: string }) {
       <h3><span>{P.name}</span></h3>
       <div className="poses" style={{ marginBottom: 14 }}>
         {POSES.map((q) => <button key={q.id} className={`pose ${P.pose === q.id ? 'on' : ''}`} onClick={() => { snap(); up({ pose: q.id as PoseId, joints: poseJoints(q.id as PoseId) }); }}><Svg d={POSE_ICONS[q.id]} vb="0 0 28 36" />{q.name}</button>)}
+      </div>
+      <div className="row">
+        <div className="k"><span>Persona</span></div>
+        <div className="chips">{(['uomo', 'donna'] as const).map((f) => <button key={f} className={`chip ${(P.figure || 'uomo') === f ? 'on' : ''}`} onClick={() => { snap(); up({ figure: f }); }}>{f === 'uomo' ? 'Uomo' : 'Donna'}</button>)}</div>
       </div>
       <div className="row">
         <div className="k"><span>Pelle</span></div>
@@ -194,7 +217,12 @@ export function PropCard({ id }: { id: string }) {
         <div className="k"><span>Inclinazione</span><b className="num">{Math.round(O.tilt)}°</b></div>
         <input type="range" min={-90} max={90} step={1} value={O.tilt} onPointerDown={snap} onChange={(e) => up({ tilt: +e.target.value })} />
       </div>
-      <div className="hint">Trascina il quadratino per spostarlo (Alt per l'altezza), rotella per girarlo.</div>
+      <div className="hint">{({
+        bandiera: 'Bandiera: taglia la luce. Mettila davanti a una lampada per togliere luce dove non la vuoi (ombra netta vicino al soggetto, morbida vicino alla lampada).',
+        nero: 'Pannello nero: toglie il riempimento. Dal suo lato la stanza rimbalza meno luce, il lato in ombra del soggetto si scurisce.',
+        bianco: 'Pannello bianco: rimbalza la luce che lo colpisce. Giralo verso la lampada e verso il soggetto per schiarire le ombre.',
+        diffusore: 'Telaio di diffusione: mettilo davanti a una lampada, la luce diventa grande e morbida.',
+      } as Record<string, string>)[O.kind]} Trascina il quadratino per spostarlo (Alt per l'altezza), rotella per girarlo.</div>
       <div className="hr" /><button className="more danger" onClick={removeSelection}>Rimuovi</button>
     </Pop>
   );
@@ -207,5 +235,7 @@ export function SelectionCard() {
   if (!sel || shooting) return null;
   if (sel.type === 'light') return <LightCard key={key} id={sel.id} />;
   if (sel.type === 'person') return <PersonCard key={key} id={sel.id} />;
+  if (sel.type === 'furniture') return <FurnitureCard key={key} id={sel.id} />;
+  if (sel.type === 'opening') return <OpeningCard key={key} id={sel.id} />;
   return <PropCard key={key} id={sel.id} />;
 }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useStore, Shot } from '../store';
 import { eng } from '../engineRef';
+import { roomBounds, windowInfos } from '../engine/room';
 import { planSVG, svgToCanvas, kitRows, kitSummary, kitCSV, buildPDF, download, slug, cameraLine, sunLine, PlanInput } from '../export/exports';
 
 export function Roll() {
@@ -15,7 +16,9 @@ export function Roll() {
 }
 
 function planInput(shot: Shot): PlanInput | null {
-  const recon = useStore.getState().recon;
+  const st = useStore.getState();
+  const room = shot.scene.room || st.room;
+  const recon = room ? { room: roomBounds(room), windows: windowInfos(room), camera: { position: [0, 1.6, room.depth / 2 - 0.5] } } : st.recon;
   if (!recon) return null;
   const cp = (shot as any).camPos as [number, number, number] | undefined;
   const cd = (shot as any).camDir as [number, number, number] | undefined;
@@ -23,7 +26,10 @@ function planInput(shot: Shot): PlanInput | null {
   const dir = cd || (e ? new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion).toArray() : [0, 0, -1]);
   const pos = cp || (e ? e.camera.position.toArray() : recon.camera.position);
   const hfov = (shot as any).hfov || THREE.MathUtils.degToRad(60);
-  return { scene: shot.scene, recon, camera: { position: pos as any, dir: dir as any, hfov } };
+  const m = shot.move;
+  const first = m ? st.shots.find((x) => x.move?.group === m.group && x.move.frame === 0) : null;
+  const move = m ? { start: m.start, startDir: ((first as any)?.camDir || dir) as any, end: m.end, endDir: m.endDir, text: m.text } : undefined;
+  return { scene: shot.scene, recon, camera: { position: pos as any, dir: dir as any, hfov }, move };
 }
 
 export function Viewer() {
@@ -42,6 +48,7 @@ export function Viewer() {
   const inp = useMemo(() => (shot ? planInput(shot) : null), [shot]);
   const svg = useMemo(() => (inp ? planSVG(inp) : ''), [inp]);
   if (!shot || !inp) return null;
+  const group = shot.move ? shots.filter((x) => x.move?.group === shot.move!.group).sort((a, b) => a.move!.frame - b.move!.frame) : [];
   const base = `${slug(place)}-${new Date(shot.createdAt).toISOString().slice(0, 16).replace(/[:T]/g, '-')}`;
   const rows = kitRows(shot.scene);
   const sum = kitSummary(shot.scene);
@@ -52,7 +59,7 @@ export function Viewer() {
       if (tab === 'img') download(shot.url, `${base}.jpg`);
       if (tab === 'plan') { const c = await svgToCanvas(svg, 2); download(c.toDataURL('image/png'), `${base}-pianta-luci.png`); }
       if (tab === 'kit') download(URL.createObjectURL(new Blob(['﻿' + kitCSV(shot.scene)], { type: 'text/csv' })), `${base}-lista-materiale.csv`);
-      if (tab === 'pdf') { const doc = await buildPDF({ title: place, imageUrl: shot.url, imgW: shot.width, imgH: shot.height, plan: inp }); doc.save(`${base}-troupe.pdf`); }
+      if (tab === 'pdf') { const doc = await buildPDF({ title: place, imageUrl: shot.url, imgW: shot.width, imgH: shot.height, plan: inp, frames: group.map((g) => ({ url: g.url, label: g.move!.label })) }); doc.save(`${base}-troupe.pdf`); }
     } finally { setBusy(false); }
   };
   return (
@@ -81,6 +88,11 @@ export function Viewer() {
           </div>
         )}
       </div>
+      {group.length > 1 && (
+        <div className="frames">
+          {group.map((g) => <button key={g.id} className={g.id === shot.id ? 'on' : ''} onClick={() => useStore.setState({ viewer: g.id })}><img src={g.url} alt={g.move!.label} /><span>{g.move!.label}</span></button>)}
+        </div>
+      )}
       <div className="actions glass">
         <button className={tab === 'img' ? 'on' : ''} onClick={() => setTab('img')}>Immagine</button>
         <button className={tab === 'plan' ? 'on' : ''} onClick={() => setTab('plan')}>Pianta luci</button>
@@ -88,7 +100,7 @@ export function Viewer() {
         <button className={tab === 'pdf' ? 'on' : ''} onClick={() => setTab('pdf')}>PDF troupe</button>
         <button className="dl" onClick={dl} disabled={busy}>{busy ? 'Preparo…' : 'Scarica'}</button>
       </div>
-      <div className="meta num">{shot.width} × {shot.height} · {cameraLine(shot.scene)}</div>
+      <div className="meta num">{shot.move ? `${shot.move.text} · fotogramma ${shot.move.frame + 1} di ${shot.move.of} · ` : ''}{shot.width} × {shot.height} · {cameraLine(shot.scene)}</div>
     </div>
   );
 }
