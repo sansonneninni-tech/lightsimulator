@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
 import Pop from './Pop';
-import { Svg } from './icons';
+import { Svg, Del } from './icons';
 import { edgePoint } from './Handles';
 import { TEMPLATES, Template, createRoom, updateRoom, addOpening, updateOpening, addFurniture, moveFurniture, duplicateFurniture, removeFurniture, removeOpening } from '../build';
 import { FURNITURE, FINISHES, furnitureKind } from '../engine/furniture';
@@ -145,7 +145,7 @@ export function FurnitureCard({ id }: { id: string }) {
   const rot = (d: number) => { st().snapshot(); moveFurniture(id, { rotationY: (((f.rotationY + d) % 360) + 360) % 360 }); };
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{k.name}</span>{light && <div className={`toggle ${light.on ? 'on' : ''}`} title="Accesa" onClick={() => { st().snapshot(); st().updateLight(light.id, { on: !light.on }); }} />}</h3>
+      <h3><span>{k.name}</span><div className="acts">{light && <div className={`toggle ${light.on ? 'on' : ''}`} title="Accesa" onClick={() => { st().snapshot(); st().updateLight(light.id, { on: !light.on }); }} />}<Del onClick={() => removeFurniture(id)} /></div></h3>
       <div className="row">
         <div className="k"><span>Finitura</span></div>
         <div className="chips">
@@ -172,10 +172,7 @@ export function FurnitureCard({ id }: { id: string }) {
       )}
       <div className="hint">Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.</div>
       <div className="hr" />
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
-        <button className="more danger" onClick={() => removeFurniture(id)}>Rimuovi</button>
-      </div>
+      <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
     </Pop>
   );
 }
@@ -198,7 +195,7 @@ export function OpeningCard({ id }: { id: string }) {
   const name = OPENING_KINDS.find((k) => k.id === o.kind)?.name || '';
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{name}{o.kind !== 'porta' && o.closed ? ' · oscurata' : ''}</span>{o.kind !== 'porta' && <div className={`toggle ${o.closed ? '' : 'on'}`} title={o.closed ? 'Apri' : 'Chiudi l\'oscurante'} onClick={() => up({ closed: !o.closed }, true)} />}</h3>
+      <h3><span>{name}{o.kind !== 'porta' && o.closed ? ' · oscurata' : ''}</span><div className="acts">{o.kind !== 'porta' && <div className={`toggle ${o.closed ? '' : 'on'}`} title={o.closed ? 'Apri' : 'Chiudi l\'oscurante'} onClick={() => up({ closed: !o.closed }, true)} />}<Del onClick={() => removeOpening(id)} /></div></h3>
       {o.kind !== 'porta' && <div className="hint" style={{ marginBottom: 12 }}>{o.closed ? 'Oscurante chiuso: da qui non entra luce. Con tutte le finestre chiuse la stanza è al buio.' : 'Aperta: entrano sole e cielo. L\'interruttore chiude l\'oscurante.'}</div>}
       <div className="row">
         <div className="types four" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
@@ -224,7 +221,6 @@ export function OpeningCard({ id }: { id: string }) {
         </div>
       )}
       <div className="hint">Trascinala per spostarla lungo la parete. {o.kind !== 'porta' ? "Da qui entrano il sole e il cielo: l'ora si cambia in alto a destra." : ''}</div>
-      <div className="hr" /><button className="more danger" onClick={() => removeOpening(id)}>Rimuovi</button>
     </Pop>
   );
 }

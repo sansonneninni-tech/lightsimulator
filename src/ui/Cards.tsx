@@ -4,7 +4,7 @@ import { useStore } from '../store';
 import { eng } from '../engineRef';
 import Pop from './Pop';
 import { edgePoint } from './Handles';
-import { Svg, TYPE_ICONS, POSE_ICONS } from './icons';
+import { Svg, Del, TYPE_ICONS, POSE_ICONS } from './icons';
 import {
   fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter,
 } from '../engine/photometry';
@@ -51,11 +51,11 @@ export function LightCard({ id }: { id: string }) {
   const [kMin, kMax] = fx.kelvinRange || [1800, 10000];
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{L.name}</span><div className={`toggle ${L.on ? 'on' : ''}`} title={win && L.windowId && st().room ? 'Aperta (spegni per chiudere l\'oscurante)' : 'Accesa'} onClick={() => {
+      <h3><span>{L.name}</span><div className="acts"><div className={`toggle ${L.on ? 'on' : ''}`} title={win && L.windowId && st().room ? 'Aperta (spegni per chiudere l\'oscurante)' : 'Accesa'} onClick={() => {
         // finestra di una stanza costruita: spegnere vuol dire chiudere l'oscurante (vale anche nello scatto)
         if (win && L.windowId && st().room) { updateOpening(L.windowId, { closed: true }, true); useStore.setState({ selection: null }); st().showToast('Oscurante chiuso: da questa finestra non entra più luce. Toccala per riaprirla.'); return; }
         snap(); up({ on: !L.on });
-      }} /></h3>
+      }} />{!win && <Del title={L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'} onClick={removeSelection} />}</div></h3>
       <div className="row">
         <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)}${L.stops > 0.01 ? ' oltre il pieno' : L.stops < -0.01 ? ` · ${Math.max(1, Math.round(Math.pow(2, L.stops) * 100))}%` : ' · pieno'}`}</b></div>
         <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => {
@@ -144,7 +144,6 @@ export function LightCard({ id }: { id: string }) {
           )}
           {(win || L.attached) && <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>}
           <div className="hint">Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin.</div>
-          {!win && <><div className="hr" /><button className="more danger" onClick={removeSelection}>{L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'}</button></>}
         </div>
       )}
     </Pop>
@@ -161,7 +160,7 @@ export function PersonCard({ id }: { id: string }) {
   const snap = () => st().snapshot();
   return (
     <Pop x={xy.x} y={xy.y - 120} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{P.name}</span></h3>
+      <h3><span>{P.name}</span><Del title="Rimuovi persona" onClick={removeSelection} /></h3>
       <div className="poses" style={{ marginBottom: 14 }}>
         {POSES.map((q) => <button key={q.id} className={`pose ${P.pose === q.id ? 'on' : ''}`} onClick={() => { snap(); up({ pose: q.id as PoseId, joints: poseJoints(q.id as PoseId) }); }}><Svg d={POSE_ICONS[q.id]} vb="0 0 28 36" />{q.name}</button>)}
       </div>
@@ -183,7 +182,6 @@ export function PersonCard({ id }: { id: string }) {
       </div>
       <div className="line"><span>Manichino</span><div className={`toggle ${manikin === id ? 'on' : ''}`} onClick={() => useStore.setState({ manikin: manikin === id ? null : id })} /></div>
       <div className="hint">Trascina l'anello a terra per spostarla, rotella per girarla. Doppio clic sull'anello per muovere le articolazioni.</div>
-      <div className="hr" /><button className="more danger" onClick={removeSelection}>Rimuovi persona</button>
     </Pop>
   );
 }
@@ -197,7 +195,7 @@ export function PropCard({ id }: { id: string }) {
   const snap = () => st().snapshot();
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
-      <h3><span>{PROP_KINDS.find((k) => k.id === O.kind)?.name}</span></h3>
+      <h3><span>{PROP_KINDS.find((k) => k.id === O.kind)?.name}</span><Del onClick={removeSelection} /></h3>
       <div className="row">
         <div className="types four">{PROP_KINDS.map((k) => <button key={k.id} className={`type ${O.kind === k.id ? 'on' : ''}`} onClick={() => { snap(); up({ kind: k.id }); }}><Svg d={TYPE_ICONS[k.name]} />{k.name}</button>)}</div>
       </div>
@@ -223,7 +221,6 @@ export function PropCard({ id }: { id: string }) {
         bianco: 'Pannello bianco: rimbalza la luce che lo colpisce. Giralo verso la lampada e verso il soggetto per schiarire le ombre.',
         diffusore: 'Telaio di diffusione: mettilo davanti a una lampada, la luce diventa grande e morbida.',
       } as Record<string, string>)[O.kind]} Trascina il quadratino per spostarlo (Alt per l'altezza), rotella per girarlo.</div>
-      <div className="hr" /><button className="more danger" onClick={removeSelection}>Rimuovi</button>
     </Pop>
   );
 }

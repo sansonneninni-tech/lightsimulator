@@ -89,7 +89,11 @@ input{font:inherit}
 .pop{position:fixed;z-index:8;padding:16px;width:300px;transform-origin:var(--ox,0) var(--oy,0);animation:grow .2s var(--ease);max-height:calc(100vh - 120px);overflow:auto}
 .pop::-webkit-scrollbar{width:0}
 @keyframes grow{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
-.pop h3{font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px}
+.pop h3{font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;z-index:2;margin:-8px -16px 10px;padding:8px 16px 6px;background:rgba(22,22,24,.94);border-radius:14px 14px 0 0}
+.pop h3 .acts{display:flex;align-items:center;gap:6px;flex:none}
+.del{width:30px;height:30px;margin:-5px -7px -5px 0;border:0;border-radius:8px;background:none;color:var(--t2);display:grid;place-items:center;cursor:pointer;flex:none;transition:color .15s,background .15s}
+.del:hover{color:#FF6B5E;background:rgba(255,255,255,.06)}
+.del svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .pop h3 span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row{margin-bottom:14px}
 .row .k{display:flex;justify-content:space-between;color:var(--t2);font-size:11px;margin-bottom:8px;gap:8px}
@@ -211,10 +215,10 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 .pop.sheet .hint:not(.num){display:none}
 .pop.sheet.full .hint{display:block}
 .pop.sheet .grab .x{position:absolute;right:4px;top:0;width:40px;height:32px;border:0;background:none;color:var(--t2);font-size:22px;line-height:28px;cursor:pointer}
-.pop.sheet h3{margin-bottom:12px;min-height:22px}
+.pop.sheet h3{top:28px;margin-top:-6px;min-height:34px;border-radius:0}
 @media (max-width:600px){#dock{transition:opacity .2s,transform .2s var(--ease)}body.sheet-open #dock{opacity:0;pointer-events:none;transform:translateX(-50%) translateY(24px)}}
 @keyframes sheetup{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
-.pop.sheet .grab{position:sticky;top:0;z-index:2;height:28px;margin:0 -16px 6px;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none}
+.pop.sheet .grab{position:sticky;top:0;z-index:3;background:rgba(22,22,24,.94);height:28px;margin:0 -16px 6px;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none}
 .pop.sheet .grab i{width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.4)}
 .pop.sheet.mini{max-height:66px;overflow:hidden}
 .pop.sheet.mini .grab i{background:#fff}
@@ -228,6 +232,8 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
   .handle .lbl{top:54px}
   .joint{width:16px;height:16px;margin:-8px 0 0 -8px}
   .joint::before{content:"";position:absolute;inset:-12px;border-radius:50%}
+  .del{width:40px;height:40px;margin:-10px -10px -10px 0}
+  .del svg{width:19px;height:19px}
 }
 
 /* computer: la scheda si sposta trascinandola; la lineetta in alto lo suggerisce */
