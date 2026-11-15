@@ -94,6 +94,7 @@ export const CATEGORIES: { id: string; name: string }[] = [
   { id: 'sedute', name: 'Sedute' }, { id: 'divani', name: 'Divani' }, { id: 'tavoli', name: 'Tavoli' }, { id: 'letti', name: 'Letti' },
   { id: 'contenitori', name: 'Armadi e librerie' }, { id: 'luci', name: 'Lampade' }, { id: 'tappeti', name: 'Tappeti' }, { id: 'pareti', name: 'Quadri e specchi' },
   { id: 'decoro', name: 'Oggetti' }, { id: 'piante', name: 'Piante' }, { id: 'cucina', name: 'Cucina' }, { id: 'bagno', name: 'Bagno' },
+  { id: 'esterni', name: 'Esterni' }, { id: 'natura', name: 'Alberi e rocce' },
 ];
 const byId = new Map(ALL_FURNITURE.map((f) => [f.id, f]));
 export const furnitureKind = (id: string) => byId.get(id) || FURNITURE[0];

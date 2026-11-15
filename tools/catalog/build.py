@@ -41,11 +41,15 @@ for name, label, cat, o in ITEMS:
         e['wall'] = o['wall']
     if o.get('ceil'):
         e['ceiling'] = True
+    if o.get('flat'):
+        e['flat'] = True
     if 'light' in o:
-        fx, k, frac = o['light']
+        fx, k, frac, *xz = o['light']
+        dx, dz = (xz + [0, 0])[:2]
         # quota della lampadina: dal soffitto in giù per quelle appese, da terra per le altre
+        # (x, z facoltativi: spostamento dal centro dell'ingombro, in metri, per lanterne a sbalzo)
         y = round(-h + frac * h, 3) if o.get('ceil') else round(frac * h, 3)
-        e['light'] = {'offset': [0, y, 0], 'fixture': fx, 'kelvin': k, 'name': label}
+        e['light'] = {'offset': [round(dx * s, 3), y, round(dz * s, 3)], 'fixture': fx, 'kelvin': k, 'name': label}
     rows.append(e)
 
 ts = ['// Generato da tools/catalog/build.py: arredi a modello 3D (CC0, vedi public/catalog/LICENSE.txt)',

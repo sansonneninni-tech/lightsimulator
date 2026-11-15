@@ -1,11 +1,20 @@
 Arredi a modello 3D del catalogo (public/catalog/*.glb) e relative miniature (th/).
 
-Tutti i modelli sono rilasciati in pubblico dominio (CC0 1.0):
-- Poly Haven (https://polyhaven.com/models), CC0 1.0.
-- Modelli originali del progetto PlanScape-AI (CC0, vedi il suo CREDITS.md).
-- Altri modelli CC0 raccolti dai repository ezEngine/store-sample, TheMarco/liminal,
-  AndreTInfante/portalgi, Neopallium/bevy_fake_interior, ghantapavan93/Utility-Connect---Move-Relay
-  (tutti con licenza CC0 dichiarata per gli asset).
+Tutti i modelli sono in pubblico dominio (CC0 1.0). Nessun modello CC-BY o di licenza incerta.
+- Poly Haven (https://polyhaven.com/models), CC0 1.0. I file sono stati presi da copie
+  pubbliche su GitHub dei pacchetti originali (riconoscibili dalle texture *_diff/_nor_gl/_arm):
+  ezEngine/store-sample, TheMarco/liminal, AndreTInfante/portalgi, Neopallium/bevy_fake_interior,
+  ghantapavan93/Utility-Connect---Move-Relay, hwcgames/snald, EliteGamer007/6dof-drone-sim,
+  andersanders806-dev/dopesick-game, Paraxdev/TrenchDot, ayoub5550/inside-copy-, sahilmdev/carr-game,
+  awplanets/awplanet, rawprogress/fable-cities, MikeMirage/RoadRushers, darkyboys/Drunk-Driving-Simulator,
+  AetherRadar/operation-steel-tide, jbang2004/long-wind, Civicverse/Civicverse, Adel-Ayoub/rabbet.
+  La licenza CC0 è quella di Poly Haven, indipendente dalla licenza del repository che li ospita.
+  Alcuni pacchetti Poly Haven con più varianti sono stati ridotti a una sola variante.
+- Modelli originali del progetto PlanScape-AI (Jatvish/PlanScape-AI), CC0 1.0 secondo il suo
+  apps/web/public/assets/realism/CREDITS.md e i metadati dei file (asset.extras.license = CC0-1.0).
+  Escluso di proposito GlamVelvetSofa, che lì è CC BY 4.0.
+- Modelli fatti a mano per questo progetto (ombrellone, lettino, sdraio, telo da mare, borsa frigo,
+  cono stradale, bicicletta, palma, cactus a candelabro, cactus a barile): tools/catalog/proc.html, CC0 1.0.
 
 I file sono stati ottimizzati (meshopt, texture webp 1024 px) e rinominati.
 https://creativecommons.org/publicdomain/zero/1.0/

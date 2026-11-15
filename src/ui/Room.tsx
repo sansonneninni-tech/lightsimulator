@@ -90,10 +90,10 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
       </div>
       {tab === 'arredi' ? (
         <>
-          <div className="cats">
+          <div className="cats" onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}>
             {CATEGORIES.map((c) => <button key={c.id} className={`chip ${cat === c.id ? 'on' : ''}`} onClick={() => { lastCat = c.id; setCat(c.id); }}>{c.name}</button>)}
           </div>
-          <div className="catalog">
+          <div className="catalog" key={cat}>
             {ALL_FURNITURE.filter((k) => k.cat === cat).map((k) => (
               <button key={k.id} className="item" onClick={() => { addFurniture(k.id); onClose(); }}>
                 {k.model ? <img src={`${import.meta.env.BASE_URL}catalog/th/${k.model}.webp`} alt="" loading="lazy" draggable={false} /> : <span className="ic"><Svg d={k.icon} /></span>}
