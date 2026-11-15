@@ -299,7 +299,12 @@ export function updateRoom(patch: Partial<RoomSpec>, snapshot = true) {
   if (snapshot) s.snapshot();
   const room: RoomSpec = { ...s.room, ...patch };
   room.openings = room.openings.map((o) => fitOpening(room, o, room.openings));
-  let furniture = s.furniture.map((f) => clampFurniture(f, room, s.furniture));
+  // cambiando luogo all'aperto: via ciò che non ha dove stare (lampadari; quadri senza facciate)
+  const homeless = (f: FurnitureState) => { const k = furnitureKind(f.kind); return !!room.outdoor && (!!k.ceiling || (k.wall != null && !hasFacades(room))); };
+  const gone = s.furniture.filter(homeless);
+  if (gone.length) s.showToast(gone.length === 1 ? `${furnitureKind(gone[0].kind).name} tolto: qui non ha dove stare.` : `${gone.length} arredi tolti: qui non hanno dove stare.`);
+  const kept = s.furniture.filter((f) => !homeless(f));
+  let furniture = kept.map((f) => clampFurniture(f, room, kept));
   furniture = furniture.map((f) => clampFurniture(f, room, furniture));
   const lights = syncRoomLights(room, furniture, s.lights).map((L) => {
     if (L.origin === 'finestra' || L.attached) return L;
