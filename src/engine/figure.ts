@@ -72,7 +72,7 @@ export function loadFigure(model: string): Promise<Template | null> {
 }
 
 // aggiunge (se serve) la figura alla persona e la mette nella posa del manichino
-export function poseFigure(root: THREE.Group, p: P & { height: number }) {
+export function poseFigure(root: THREE.Group, p: P & { height: number; pose?: string }) {
   const model = figureModel(p);
   const template = templates.get(model);
   if (!template) return false;
@@ -93,6 +93,7 @@ export function poseFigure(root: THREE.Group, p: P & { height: number }) {
     body.visible = false;
   }
   fig.scale.setScalar((0.95 * height / 1.75) / template.hipsH);
+  fig.position.set(0, 0, 0);
   root.updateMatrixWorld(true);
   // ossa dall'alto verso il basso: ognuno prende l'orientamento del giunto del manichino
   const wq = new THREE.Quaternion();
@@ -118,5 +119,14 @@ export function poseFigure(root: THREE.Group, p: P & { height: number }) {
     for (const c of b.children) c.updateMatrixWorld(false);
   }
   fig.updateMatrixWorld(true);
+  // steso: la schiena sul materasso (il manichino ha un altro spessore e resterebbe sospeso)
+  if (p.pose === 'steso') {
+    const skin = fig.getObjectByName('pelle');
+    if (skin) {
+      const box = new THREE.Box3().setFromObject(skin, true);
+      fig.position.y = root.position.y + 0.465 - box.min.y;
+      fig.updateMatrixWorld(true);
+    }
+  }
   return true;
 }

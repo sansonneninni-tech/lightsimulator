@@ -8,10 +8,13 @@ import { buildHuman, defaultLook, Look, HAIR_COLORS, EXPRESSIONS, loadBase } fro
 import { prepareHuman } from '../engine/figure';
 import { SKINS } from '../engine/mannequin';
 
-const HAIR = [['', 'Rasati'], ['short02', 'Corti'], ['short01', 'Corti mossi'], ['short03', 'Cortissimi'], ['short04', 'Spettinati'], ['bob01', 'Caschetto'], ['bob02', 'Caschetto liscio'], ['long01', 'Lunghi'], ['ponytail01', 'Coda'], ['braid01', 'Trecce'], ['afro01', 'Afro']];
+const HAIR = [['', 'Rasati'], ['short02', 'Corti'], ['short01', 'Corti mossi'], ['short03', 'Ciuffo'], ['short04', 'Tirati indietro'], ['bob01', 'Caschetto con frangia'], ['bob02', 'Caschetto'], ['long01', 'Lunghi'], ['ponytail01', 'Coda'], ['braid01', 'Treccia']];
 const BROWS = [['eyebrow001', 'Naturali'], ['eyebrow002', 'Folte'], ['eyebrow003', 'Arcuate'], ['eyebrow006', 'Sottili'], ['eyebrow009', 'Cespugliose'], ['eyebrow010', 'Curate'], ['eyebrow011', 'Fini'], ['eyebrow012', 'Leggere']];
-const OUTFITS = [['male_casualsuit01', 'Camicia e jeans'], ['male_casualsuit02', 'T-shirt e jeans'], ['male_casualsuit03', 'Cardigan a righe'], ['male_casualsuit04', 'Canotta e jeans'], ['male_casualsuit05', 'Gilet e jeans'], ['male_casualsuit06', 'T-shirt bianca'], ['male_elegantsuit01', 'Abito scuro'], ['male_worksuit01', 'Salopette'],
-  ['female_casualsuit01', 'Maglietta e jeans'], ['female_casualsuit02', 'Maglietta e shorts'], ['female_elegantsuit01', 'Tailleur'], ['female_sportsuit01', 'Tuta'], ['', 'Intimo']];
+const OUTFITS = [['male_casualsuit01', 'Camicia e jeans'], ['male_casualsuit02', 'Maglia e jeans'], ['male_casualsuit03', 'Camicia a righe'], ['male_casualsuit04', 'T-shirt e jeans'], ['male_casualsuit05', 'Giacca e jeans'], ['male_casualsuit06', 'T-shirt bianca'], ['male_elegantsuit01', 'Abito scuro'], ['male_worksuit01', 'Salopette'],
+  ['female_casualsuit01', 'Maglietta e jeans'], ['female_casualsuit02', 'Maglietta e shorts'], ['female_elegantsuit01', 'Camicia e gonna'], ['female_sportsuit01', 'Top e leggings']];
+// all'uomo i capi da uomo; alla donna i suoi e quelli da uomo che le stanno bene
+const UNISEX = ['male_casualsuit01', 'male_casualsuit03', 'male_casualsuit05', 'male_casualsuit06', 'male_elegantsuit01', 'male_worksuit01'];
+const outfitsFor = (f: 'uomo' | 'donna') => OUTFITS.filter(([id]) => (f === 'uomo' ? id.startsWith('male') : id.startsWith('female') || UNISEX.includes(id)));
 const SHOES = [['shoes01', 'Cuoio'], ['shoes02', 'Scarponcini'], ['shoes03', 'Stivali'], ['shoes04', 'Nere'], ['', 'Scalzo']];
 const EYES = [['brown', 'Castani'], ['brownlight', 'Nocciola'], ['green', 'Verdi'], ['blue', 'Azzurri'], ['lightblue', 'Celesti'], ['grey', 'Grigi']];
 const EYE_SW: Record<string, string> = { brown: '#4a2c1a', brownlight: '#8a5a2e', green: '#4f6b3a', blue: '#3c6a9a', lightblue: '#8db4d8', grey: '#8a9096' };
@@ -39,7 +42,7 @@ function randomLook(fig: 'uomo' | 'donna'): Look {
   const r = [Math.random(), Math.random(), Math.random() * 1.5]; const t = r[0] + r[1] + r[2]; L.race = [r[0] / t, r[1] / t, r[2] / t];
   for (const [, l] of FACE) for (const [k] of l) L.s[k] = Math.random() < 0.6 ? +(rnd(-0.6, 0.6)).toFixed(2) : 0;
   L.form = pickR(FORMS)[0];
-  L.hair = fig === 'donna' ? pickR(['bob01', 'bob02', 'long01', 'ponytail01', 'braid01', 'afro01', 'short01']) : pickR(['short01', 'short02', 'short03', 'short04', 'afro01', '', 'short02']);
+  L.hair = fig === 'donna' ? pickR(['bob01', 'bob02', 'long01', 'ponytail01', 'braid01', 'short01']) : pickR(['short01', 'short02', 'short03', 'short04', '', 'short02']);
   L.hairColor = L.age > 0.55 ? pickR(['#8d8a86', '#e3e0da']) : pickR(HAIR_COLORS).id;
   L.brows = pickR(BROWS)[0]; L.eyes = pickR(EYES)[0];
   L.outfit = pickR(OUTFITS.filter(([id]) => id && id.startsWith(fig === 'donna' ? 'female' : 'male')))[0];
@@ -222,7 +225,7 @@ export default function Creator() {
             <div className="row"><div className="k"><span>Sopracciglia</span></div><Chips items={BROWS} v={look.brows} set={(v) => set({ brows: v })} /></div>
           </>}
           {tab === 'Abiti' && <>
-            <div className="row"><div className="k"><span>Abito</span></div><Chips items={OUTFITS} v={look.outfit} set={(v) => set({ outfit: v })} /></div>
+            <div className="row"><div className="k"><span>Abito</span></div><Chips items={outfitsFor(fig)} v={look.outfit} set={(v) => set({ outfit: v })} /></div>
             {look.outfit && <Slider label="Tinta" v={look.outfitHue} min={-180} max={180} set={(v) => set({ outfitHue: Math.round(v / 10) * 10 })} fmt={(v) => (v === 0 ? 'originale' : `${v > 0 ? '+' : ''}${v}°`)} />}
             {look.outfit && <Slider label="Chiarezza" lo="più scuro" hi="più chiaro" v={look.outfitLight} set={(v) => set({ outfitLight: Math.round(v * 20) / 20 })} />}
             <div className="row"><div className="k"><span>Scarpe</span></div><Chips items={SHOES} v={look.shoes} set={(v) => set({ shoes: v })} /></div>

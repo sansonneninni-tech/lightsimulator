@@ -91,7 +91,7 @@ const POSE_DEFS: Record<PoseId, PoseDef> = {
   },
   conserte: {
     hipsY: 0.95,
-    joints: { shoulder_l: [-24, -30, 6], elbow_l: [-98, 0, 0], shoulder_r: [-24, 30, -6], elbow_r: [-98, 0, 0], hip_l: [0, 0, 3], hip_r: [0, 0, -3] },
+    joints: { shoulder_l: [-20, -70, 10], elbow_l: [-105, 0, 0], shoulder_r: [-20, 70, -10], elbow_r: [-105, 0, 0], hip_l: [0, 0, 3], hip_r: [0, 0, -3] },
   },
 };
 

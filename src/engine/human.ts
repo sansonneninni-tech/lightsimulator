@@ -33,9 +33,9 @@ export const HAIR_COLORS = [
 export const EXPRESSIONS: { id: string; name: string; u: Record<string, number> }[] = [
   { id: 'neutra', name: 'Neutra', u: {} },
   { id: 'sorriso', name: 'Sorriso', u: { 'mouth-corner-puller': 0.75, 'eye-left-slit': 0.25, 'eye-right-slit': 0.25 } },
-  { id: 'risata', name: 'Risata', u: { 'mouth-corner-puller': 1, 'mouth-open': 0.4, 'mouth-parling': 0.6, 'eye-left-slit': 0.45, 'eye-right-slit': 0.45 } },
-  { id: 'parla', name: 'Parla', u: { 'mouth-open': 0.28, 'mouth-parling': 0.35 } },
-  { id: 'sorpresa', name: 'Sorpresa', u: { 'eyebrows-left-up': 0.9, 'eyebrows-right-up': 0.9, 'eye-left-opened-up': 0.7, 'eye-right-opened-up': 0.7, 'mouth-open': 0.5 } },
+  { id: 'risata', name: 'Risata', u: { 'mouth-corner-puller': 1, 'mouth-open': 0.16, 'mouth-parling': 0.45, 'eye-left-slit': 0.45, 'eye-right-slit': 0.45 } },
+  { id: 'parla', name: 'Parla', u: { 'mouth-open': 0.1, 'mouth-parling': 0.3 } },
+  { id: 'sorpresa', name: 'Sorpresa', u: { 'eyebrows-left-up': 0.9, 'eyebrows-right-up': 0.9, 'eye-left-opened-up': 0.7, 'eye-right-opened-up': 0.7, 'mouth-open': 0.22 } },
   { id: 'triste', name: 'Triste', u: { 'eyebrows-left-inner-up': 0.9, 'eyebrows-right-inner-up': 0.9, 'mouth-depression': 0.7 } },
   { id: 'arrabbiata', name: 'Arrabbiata', u: { 'eyebrows-left-down': 0.9, 'eyebrows-right-down': 0.9, 'mouth-compression': 0.6, 'nose-left-elevation': 0.4, 'nose-right-elevation': 0.4 } },
   { id: 'pensosa', name: 'Pensosa', u: { 'mouth-pursing': 0.4, 'eyebrows-left-down': 0.35, 'eyebrows-right-inner-up': 0.4, 'eye-left-slit': 0.2, 'eye-right-slit': 0.2 } },
@@ -141,6 +141,9 @@ function addTarget(pos: Float32Array, buf: ArrayBuffer, e: [number, number, numb
   }
 }
 
+// i cursori del viso di MakeHuman sono timidi: si spingono un po' (la fronte invece stirava i capelli)
+const GAIN: Record<string, number> = { spalle: 1, torace: 1, fianchi: 1, pancia: 1, glutei: 1, collo: 1, fronte: 0.6, zigomi: 1, guance: 1.2, guanceTesta: 1.2, testa: 1.2 };
+
 const tri3 = (x: number) => [Math.max(0, 1 - 2 * x), 1 - Math.abs(2 * x - 1), Math.max(0, 2 * x - 1)]; // min, media, max
 
 // posizioni della maglia base per un aspetto
@@ -154,7 +157,9 @@ async function morph(look: Look, gender: 'uomo' | 'donna') {
   const MU = ['minmuscle', 'averagemuscle', 'maxmuscle'], WE = ['minweight', 'averageweight', 'maxweight'];
   for (const [a, wa] of ages) {
     if (wa < 1e-4) continue;
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) addTarget(pos, gp, G[`u-${a}-${MU[i]}-${WE[j]}`], wa * mus[i] * wei[j]);
+    // le forme estreme di MakeHuman sono timide: si spingono oltre perché il cursore si veda davvero
+    const amp = (i: number, j: number) => (i === 1 && j !== 1 ? 2.8 : i !== 1 && j === 1 ? 1.4 : 1);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) addTarget(pos, gp, G[`u-${a}-${MU[i]}-${WE[j]}`], wa * mus[i] * wei[j] * amp(i, j));
     const rs = look.race[0] + look.race[1] + look.race[2] || 1;
     (['african', 'asian', 'caucasian'] as const).forEach((r, i) => addTarget(pos, gp, G[`r-${r}-${a}`], (wa * look.race[i]) / rs));
   }
@@ -162,7 +167,7 @@ async function morph(look: Look, gender: 'uomo' | 'donna') {
   for (const k in look.s) {
     const v = look.s[k], sl = m.sliders[k];
     if (!sl || !v) continue;
-    for (const t of sl[v < 0 ? 0 : 1]) addTarget(pos, dp, D[t], Math.abs(v));
+    for (const t of sl[v < 0 ? 0 : 1]) addTarget(pos, dp, D[t], Math.abs(v) * (GAIN[k] ?? 1.5));
   }
   if (look.form) addTarget(pos, dp, D['head/head-' + look.form], 0.8);
   const ex = EXPRESSIONS.find((e) => e.id === look.expr);
@@ -247,7 +252,10 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
   if (look.outfit) pick('abito', look.outfit);
   if (look.shoes) pick('scarpe', look.shoes);
   if (look.hat) pick('cappello', look.hat);
+  const ord = (k: string) => (k === 'cappello' ? 0 : k === 'scarpe' ? 2 : 1); // cappello prima dei capelli, orlo dei pantaloni prima delle scarpe
+  want.sort((a, b) => ord(a.kind) - ord(b.kind));
   const bins = await Promise.all(want.map(itemBin));
+  let hemY = Infinity, hatY = Infinity;
 
   // pelle: niente sotto gli abiti (non buca il tessuto)
   const hidden = new Uint8Array(m.nv);
@@ -304,7 +312,36 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
       pp[i * 3] = v3.x + off[i * 3] * sx; pp[i * 3 + 1] = v3.y + off[i * 3 + 1] * sy; pp[i * 3 + 2] = v3.z + off[i * 3 + 2] * sz;
       bw.push(acc);
     }
-    const vmap = new Uint16Array(b, it.vert, it.nr), idx = new Uint32Array(b, it.idx, it.ni);
+    // gli abiti stanno un filo sopra la pelle: niente pelle che affiora a colletto e spalle
+    if (it.kind === 'abito') {
+      const nn = smoothNormals(pp, new Uint16Array(b, it.vert, it.nr), new Uint32Array(b, it.idx, it.ni), it.nv, (r) => new Uint16Array(b, it.vert, it.nr)[r]);
+      const vm = new Uint16Array(b, it.vert, it.nr);
+      const done = new Uint8Array(it.nv);
+      for (let r = 0; r < it.nr; r++) { const i = vm[r]; if (done[i]) continue; done[i] = 1; for (let k = 0; k < 3; k++) pp[i * 3 + k] += nn[r * 3 + k] * 0.004; }
+      hemY = Infinity;
+      for (let i = 0; i < it.nv; i++) hemY = Math.min(hemY, pp[i * 3 + 1]);
+    }
+    const vmap = new Uint16Array(b, it.vert, it.nr);
+    let idx = new Uint32Array(b, it.idx, it.ni);
+    // calze e gambali dentro i pantaloni lunghi: si tolgono, altrimenti bucano l'orlo
+    if (it.kind === 'scarpe' && hemY < 0.25) {
+      const keep: number[] = [];
+      for (let t = 0; t < idx.length; t += 3) {
+        const lo = Math.min(pp[vmap[idx[t]] * 3 + 1], pp[vmap[idx[t + 1]] * 3 + 1], pp[vmap[idx[t + 2]] * 3 + 1]);
+        if (lo < hemY + 0.015) keep.push(idx[t], idx[t + 1], idx[t + 2]);
+      }
+      idx = new Uint32Array(keep);
+    }
+    if (it.kind === 'cappello') for (let i = 0; i < it.nv; i++) hatY = Math.min(hatY, pp[i * 3 + 1]);
+    // sotto il cappello i capelli non si vedono: si tolgono, altrimenti bucano la cupola
+    if (it.kind === 'capelli' && hatY < Infinity) {
+      const keep: number[] = [];
+      for (let t = 0; t < idx.length; t += 3) {
+        const lo = Math.min(pp[vmap[idx[t]] * 3 + 1], pp[vmap[idx[t + 1]] * 3 + 1], pp[vmap[idx[t + 2]] * 3 + 1]);
+        if (lo < hatY + 0.012) keep.push(idx[t], idx[t + 1], idx[t + 2]);
+      }
+      idx = new Uint32Array(keep);
+    }
     const geo = new THREE.BufferGeometry();
     const p = new Float32Array(it.nr * 3), si = new Uint16Array(it.nr * 4), sw = new Float32Array(it.nr * 4);
     const top = bw.map((acc) => { const l = [...acc.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4); const t = l.reduce((s, e) => s + e[1], 0) || 1; return l.map(([bi, x]) => [bi, x / t] as [number, number]); });
@@ -321,7 +358,7 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
     geo.setIndex(new THREE.BufferAttribute(idx.slice(), 1));
     let mat: THREE.MeshStandardMaterial;
     if (it.kind === 'capelli') {
-      mat = MAT({ color: new THREE.Color(look.hairColor), roughness: 0.45, alphaTest: 0.45, side: THREE.DoubleSide });
+      mat = MAT({ color: new THREE.Color(look.hairColor), roughness: 0.62, alphaTest: 0.45, side: THREE.DoubleSide });
       mat.map = await loadTex(it.map!);
     } else if (it.kind === 'sopracciglia' || it.kind === 'ciglia') {
       mat = MAT({ color: new THREE.Color(it.kind === 'ciglia' ? '#ffffff' : look.hairColor).lerp(new THREE.Color('#ffffff'), 0.35), alphaTest: 0.3, side: THREE.DoubleSide, roughness: 0.7 });
@@ -330,7 +367,8 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
       mat = MAT({ roughness: 0.12, alphaTest: 0.5 });
       mat.map = await loadTex(m.eyes[look.eyes] || m.eyes.brown);
     } else if (it.kind === 'abito') {
-      mat = MAT({ roughness: 0.82, alphaTest: 0.5 });
+      // due facce: dentro il colletto o le maniche si vede la stoffa, non il vuoto
+      mat = MAT({ roughness: 0.82, alphaTest: 0.5, side: THREE.DoubleSide });
       if (it.map) mat.map = await recolor(it.map, look.outfitHue || 0, look.outfitLight || 0);
       if (it.normal) { mat.normalMap = await loadTex(it.normal, false); mat.normalScale.set(0.8, 0.8); }
     } else {
