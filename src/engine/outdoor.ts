@@ -22,8 +22,10 @@ export const shoreZ = (r: RoomSpec, x = 0) => -r.depth / 2 - 5 + 1.6 * Math.sin(
 export const waterlineZ = (r: RoomSpec, x = 0) => shoreZ(r, x) + 3;
 
 // quota del terreno nell'area del set (dove stanno persone, arredi e stativi)
-export function groundHeight(r: RoomSpec | null | undefined, x: number, _z: number) {
+export function groundHeight(r: RoomSpec | null | undefined, x: number, z: number) {
   if (r?.outdoor === 'citta') return Math.abs(x) < CITY.road ? -CITY.kerb : 0;
+  // spiaggia: la stessa sabbia del terreno (verso il mare scende), mai sotto il livello del mare
+  if (r?.outdoor === 'spiaggia') return Math.max(SEA_Y, beachH(r, x, z));
   return 0;
 }
 
@@ -134,8 +136,15 @@ function paverTex() {
 
 function rockTex() {
   return canvasTex('roccia', 512, (ctx, n) => {
-    ctx.fillStyle = '#8f6a4f'; ctx.fillRect(0, 0, n, n);
-    blotches(ctx, n, 200, 0.2, 71, '#c09a78', '#4a3324');
+    ctx.fillStyle = '#857668'; ctx.fillRect(0, 0, n, n);
+    blotches(ctx, n, 200, 0.2, 71, '#b3a493', '#463c34');
+    // strati orizzontali (arenaria)
+    const r = rng(73);
+    for (let i = 0; i < 40; i++) {
+      const y = r() * n;
+      ctx.fillStyle = `rgba(${r() < 0.5 ? '60,48,40' : '200,188,170'},${0.05 + r() * 0.08})`;
+      ctx.fillRect(0, y, n, 2 + r() * 10);
+    }
     noise(ctx, n, 30, 72);
   });
 }
@@ -297,18 +306,76 @@ function withUV(g: THREE.BufferGeometry, scale: number) {
   return g;
 }
 
-function rock(seed: number, sx: number, sy: number, sz: number) {
-  const g = mergeVertices(new THREE.IcosahedronGeometry(1, 3).deleteAttribute('normal').deleteAttribute('uv'));
+function rock(seed: number, sx: number, sy: number, sz: number, mesa = false) {
+  const g = mergeVertices(new THREE.IcosahedronGeometry(1, mesa ? 4 : 3).deleteAttribute('normal').deleteAttribute('uv'));
   const r = rng(seed);
   const ph = [r() * 6, r() * 6, r() * 6];
   const p = g.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-    const k = 1 + 0.22 * Math.sin(x * 3.1 + ph[0]) * Math.sin(y * 2.7 + ph[1]) + 0.12 * Math.sin(z * 5.3 + ph[2]) + 0.06 * Math.sin((x + y + z) * 9 + ph[0]);
-    p.setXYZ(i, x * k * sx, Math.max(-0.25, y) * k * sy, z * k * sz);
+    let k = 1 + 0.22 * Math.sin(x * 3.1 + ph[0]) * Math.sin(y * 2.7 + ph[1]) + 0.12 * Math.sin(z * 5.3 + ph[2]) + 0.06 * Math.sin((x + y + z) * 9 + ph[0])
+      + 0.035 * Math.sin(x * 17 + z * 13 + ph[1]) * Math.sin(y * 15 + ph[2]);
+    let yy = Math.max(-0.25, y);
+    if (mesa) {
+      // mesa: pareti ripide, cima piatta, un gradone a metà
+      const a = Math.atan2(z, x);
+      k *= 1 + 0.07 * Math.sin(a * 7 + ph[0]) + 0.04 * Math.sin(a * 19 + ph[1]);
+      if (y > 0.3) yy = 0.45 + 0.015 * Math.sin(a * 5 + ph[2]);
+      if (y > 0.12) k *= 0.9;
+    }
+    p.setXYZ(i, x * k * sx, yy * (mesa ? 1 : k) * sy, z * k * sz);
   }
   g.computeVertexNormals();
   return g;
+}
+
+// nastro lungo la riva: da u0 a u1 metri dalla linea dell'acqua (positivo verso terra)
+function ribbon(r: RoomSpec, X: number, step: number, edge: (x: number, side: 0 | 1) => number, y: (x: number, z: number) => number, col: (x: number, side: 0 | 1) => [number, number, number], skip?: (x: number) => boolean) {
+  const pos: number[] = [], color: number[] = [], uv: number[] = [], idx: number[] = [];
+  let n = 0;
+  for (let x = -X; x < X; x += step) {
+    if (skip?.(x)) continue;
+    for (const xx of [x, x + step]) for (const side of [0, 1] as const) {
+      const z = waterlineZ(r, xx) - edge(xx, side);
+      pos.push(xx, y(xx, z), z); uv.push(xx / 4, -z / 4); color.push(...col(xx, side));
+    }
+    idx.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
+    n += 4;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(color, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // triangoli rivolti verso l'alto qualunque sia l'ordine dei due bordi
+  if (idx.length && (g.attributes.normal as THREE.BufferAttribute).getY(0) < 0) {
+    for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
+    g.setIndex(idx);
+    g.computeVertexNormals();
+  }
+  return g;
+}
+
+function shoreStrip(r: RoomSpec, h: (x: number, z: number) => number) {
+  // dalla linea dell'acqua verso terra: sabbia bagnata e scura, poi un bordo che sfuma nella sabbia asciutta
+  const wet = (x: number) => 1.6 + 0.7 * Math.sin(x / 6.1) * Math.sin(x / 2.3 + 1) + 0.3 * Math.sin(x / 17);
+  const y = (x: number, z: number) => Math.max(SEA_Y + 0.004, h(x, z) + 0.01);
+  const W: [number, number, number] = [0.55, 0.55, 0.58];
+  const core = ribbon(r, 260, 0.5, (x, side) => (side ? -0.05 : -wet(x)), y, () => W);
+  const fade = ribbon(r, 260, 0.5, (x, side) => (side ? -wet(x) : -(wet(x) + 0.9)), y, (x, side) => (side ? W : [1, 1, 1]));
+  return mergeGeometries([core, fade]);
+}
+
+function foamStrips(r: RoomSpec) {
+  // schiuma appena posata sulla battigia (sottile, irregolare) e una linea rotta più al largo
+  const n1 = (x: number) => 0.5 + 0.5 * Math.sin(x / 3.7) * Math.sin(x / 1.3 + 2) * Math.sin(x / 9.1);
+  const y = (x: number, z: number) => Math.max(SEA_Y + 0.012, beachH(r, x, z) + 0.02);
+  const a = ribbon(r, 260, 0.35, (x, side) => (side ? -(0.05 + 0.1 * n1(x)) : 0.12 + 0.35 * n1(x + 11)), y,
+    (x, side) => { const v = side ? 0.88 : 0.5 + 0.2 * n1(x + 5); return [v, v * 1.01, v]; });
+  const b = ribbon(r, 260, 0.35, (x, side) => (side ? 1.6 + 0.6 * n1(x + 3) : 1.72 + 0.75 * n1(x + 7)), y,
+    () => [0.55, 0.56, 0.56], (x) => n1(x + 21) < 0.5);
+  return mergeGeometries([a, b]);
 }
 
 export function buildOutdoor(r: RoomSpec): OutdoorBuild {
@@ -328,7 +395,7 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
       add(mesh(geo, sandMat, 'sabbia', 0.42));
       // rocce sparse e qualche mesa lontana
       const rr = rng(7);
-      const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), roughness: 0.9 });
+      const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: new THREE.Color('#d8c8b4'), roughness: 0.9 });
       const parts: THREE.BufferGeometry[] = [];
       const R0 = Math.hypot(r.width, r.depth) / 2 + 3;
       for (let i = 0; i < 16; i++) {
@@ -343,7 +410,7 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
       for (let i = 0; i < 4; i++) {
         const a = -Math.PI / 2 + (i - 1.5) * 0.55 + rr() * 0.2, d = 700 + rr() * 600;
         const s = 40 + rr() * 40;
-        const q = rock(200 + i, s * 1.6, s * 0.9, s);
+        const q = rock(200 + i, s * 1.6, s * 1.7, s, true);
         q.translate(Math.cos(a) * d, duneH(r, Math.cos(a) * d, Math.sin(a) * d) - 4, Math.sin(a) * d);
         parts.push(q);
       }
@@ -356,6 +423,18 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
       // mare: dielettrico scuro e lucido (riflette il cielo, più a filo d'orizzonte)
       water = new THREE.MeshPhysicalMaterial({ color: new THREE.Color('#0f3c48'), roughness: 0.16, metalness: 0, ior: 1.333, normalMap: waveNormal(), normalScale: new THREE.Vector2(0.09, 0.09) });
       water.normalMap!.repeat.set(1, 1);
+      water.normalMap!.anisotropy = 8;
+      // anteprima: due campioni delle onde a scale e direzioni diverse (niente ripetizione visibile)
+      // e onde che si calmano con la distanza (lontano conta la media). Nello scatto la normal map è quella base.
+      water.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps).replace('vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;', `
+          vec2 uvB = mat2(0.81, -0.59, 0.59, 0.81) * vNormalMapUv * 0.29 + vec2(0.37, 0.11);
+          vec2 uvC = mat2(0.34, 0.94, -0.94, 0.34) * vNormalMapUv * 2.3 + vec2(0.13, 0.71);
+          vec3 mapN = (texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0) * 0.55 + (texture2D( normalMap, uvB ).xyz * 2.0 - 1.0) * 0.6 + (texture2D( normalMap, uvC ).xyz * 2.0 - 1.0) * 0.3;
+          mapN.z = 1.0;
+          mapN.xy *= 0.8 / (1.0 + length( vViewPosition ) / 35.0);`);
+      };
+      water.customProgramCacheKey = () => 'mare2';
       const sea = new THREE.PlaneGeometry(8000, 4000, 1, 1);
       sea.rotateX(-Math.PI / 2);
       const zs = shoreZ(r);
@@ -364,9 +443,12 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
       const uv = sea.attributes.uv as THREE.BufferAttribute, p = sea.attributes.position as THREE.BufferAttribute;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) / 12, -p.getZ(i) / 12);
       add(mesh(sea, water, 'mare', 0.05, { cast: false }));
+      // battigia: sabbia bagnata (più scura, verso terra sfuma nella sabbia asciutta) e schiuma sull'acqua
+      add(mesh(shoreStrip(r, (x, z) => beachH(r, x, z)), new THREE.MeshStandardMaterial({ map: sandMat.map, vertexColors: true, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 'battigia', 0.3, { cast: false }));
+      add(mesh(foamStrips(r), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 'schiuma', 0.5, { cast: false }));
       // scogli a un lato e un promontorio lontano
       const rr = rng(9);
-      const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: new THREE.Color('#9a958c'), roughness: 0.85 });
+      const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: new THREE.Color('#a4a39e'), roughness: 0.85 });
       const parts: THREE.BufferGeometry[] = [];
       for (let i = 0; i < 9; i++) {
         const x = r.width / 2 + 9 + rr() * 22, z = shoreZ(r, x) - 6 + rr() * 9;
@@ -410,11 +492,11 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
     const fac = facadeTex(), facR = facadeRough(), facE = facadeLit();
     const mats = COLORS.map((c) => {
       const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(c), map: fac, roughnessMap: facR, roughness: 1, emissiveMap: facE, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 });
-      nightMats.push({ m, nits: 7 });
+      nightMats.push({ m, nits: 3 });
       return m;
     });
     const shopM = new THREE.MeshStandardMaterial({ map: shopTex(), roughnessMap: shopRough(), roughness: 1, emissiveMap: shopLit(), emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 });
-    nightMats.push({ m: shopM, nits: 10 });
+    nightMats.push({ m: shopM, nits: 4 });
     const stone = new THREE.MeshStandardMaterial({ color: new THREE.Color('#d8d2c6'), roughness: 0.75 });
     const parts: THREE.BufferGeometry[][] = COLORS.map(() => []);
     const shops: THREE.BufferGeometry[] = [], corn: THREE.BufferGeometry[] = [];
@@ -493,6 +575,5 @@ export function outdoorPlanLines(r: RoomSpec, x0: number, x1: number, z0: number
 // quota del terreno ovunque (anche fuori dal set: dune, pendio della spiaggia, livello del mare)
 export function terrainHeight(r: RoomSpec, x: number, z: number) {
   if (r.outdoor === 'deserto') return duneH(r, x, z);
-  if (r.outdoor === 'spiaggia') return Math.max(SEA_Y, beachH(r, x, z));
   return groundHeight(r, x, z);
 }

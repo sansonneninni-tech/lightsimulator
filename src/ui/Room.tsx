@@ -117,7 +117,7 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
           <div className="row">
             <div className="k"><span>Luogo</span></div>
             <div className="chips">
-              {OUTDOORS.map((o) => <button key={o.id} className={`chip ${room.outdoor === o.id ? 'on' : ''}`} onClick={() => { if (room.outdoor === o.id) return; useStore.getState().snapshot(); up({ outdoor: o.id, ...(o.id === 'citta' ? { width: 14 } : {}) }); if (OUTDOORS.some((x) => x.name === useStore.getState().placeName)) useStore.setState({ placeName: o.name }); }}>{o.name}</button>)}
+              {OUTDOORS.map((o) => <button key={o.id} className={`chip ${room.outdoor === o.id ? 'on' : ''}`} onClick={() => { if (room.outdoor === o.id) return; useStore.getState().snapshot(); up({ outdoor: o.id, ...(o.id === 'citta' ? { width: 14 } : room.outdoor === 'citta' ? { width: o.id === 'deserto' ? 24 : 20 } : {}) }); if (OUTDOORS.some((x) => x.name === useStore.getState().placeName)) useStore.setState({ placeName: o.name }); }}>{o.name}</button>)}
             </div>
             <div className="hint">{OUTDOORS.find((o) => o.id === room.outdoor)?.ground}. Sole e cielo illuminano tutto il set.</div>
           </div>
@@ -205,7 +205,7 @@ export function FurnitureCard({ id }: { id: string }) {
           <button className="btn" onClick={() => useStore.setState({ selection: { type: 'light', id: light.id } })}>Regola la luce</button>
         </div>
       )}
-      <div className="hint">{k.wall != null ? 'Trascinalo per spostarlo lungo le pareti.' : TOUCH ? 'Trascinalo per spostarlo.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
+      <div className="hint">{k.wall != null ? (useStore.getState().room?.outdoor ? 'Trascinalo per spostarlo lungo la facciata.' : 'Trascinalo per spostarlo lungo le pareti.') : TOUCH ? 'Trascinalo per spostarlo.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
       <div className="hr" />
       <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
     </Pop>

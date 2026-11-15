@@ -190,11 +190,20 @@ function downloadJSON(data: any, name: string) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+// inquadratura della camera (posizione e direzione), salvata con le stanze costruite e nei link
+function viewOf() {
+  const e = eng();
+  if (!e) return undefined;
+  const d = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion);
+  const r = (v: number) => Math.round(v * 1000) / 1000;
+  return { pos: e.camera.position.toArray().map(r), dir: d.toArray().map(r) };
+}
+
 export function saveProject() {
   const s = useStore.getState();
   const e = eng();
   if (s.room) {
-    downloadJSON({ app: 'lightsimulator', version: 2, kind: 'stanza', placeName: s.placeName, scene: snapshotOf(), shots: s.shots }, s.placeName);
+    downloadJSON({ app: 'lightsimulator', version: 2, kind: 'stanza', placeName: s.placeName, scene: snapshotOf(), view: viewOf(), shots: s.shots }, s.placeName);
     s.showToast('Progetto salvato. Puoi riaprirlo o mandarlo a chi lavora con te.');
     return;
   }
@@ -233,6 +242,12 @@ function openRoomData(data: any) {
     sun: sc.sun, cam: sc.cam, ambient: 0, shots: data.shots || [], past: [], future: [], selection: null, manikin: null,
   });
   e.apply(snapshotOf());
+  // la camera torna dov'era quando il progetto è stato salvato (diventa anche la vista iniziale)
+  const v = data.view;
+  if (v && Array.isArray(v.pos) && Array.isArray(v.dir) && v.pos.length === 3 && v.dir.length === 3 && [...v.pos, ...v.dir].every((x: any) => Number.isFinite(x))) {
+    const pos = new THREE.Vector3(...v.pos);
+    e.setHome(pos, pos.clone().add(new THREE.Vector3(...v.dir)));
+  }
   e.resetView();
 }
 
@@ -248,7 +263,7 @@ async function gz(text: string, mode: 'gzip' | 'gunzip') {
 export async function shareLink() {
   const s = useStore.getState();
   if (!s.room) { s.showToast('Il link si può creare per le stanze costruite a mano.'); return; }
-  const data = { app: 'lightsimulator', version: 2, kind: 'stanza', placeName: s.placeName, scene: snapshotOf() };
+  const data = { app: 'lightsimulator', version: 2, kind: 'stanza', placeName: s.placeName, scene: snapshotOf(), view: viewOf() };
   const url = `${location.origin}${location.pathname}#p=${await gz(JSON.stringify(data), 'gzip')}`;
   try {
     if (matchMedia('(hover: none) and (pointer: coarse)').matches && (navigator as any).share) { await (navigator as any).share({ title: s.placeName, url }); return; }

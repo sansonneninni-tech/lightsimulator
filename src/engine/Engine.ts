@@ -987,7 +987,7 @@ export class Engine {
     if (!lamps.length || this.nightFactor(sun) < 0.3) return [];
     return lamps.map((l, i) => ({
       id: `lampione${i}`, name: 'Lampione', fixtureId: 'fresnel-led-60', position: l.pos, target: l.target, stops: 0, kelvin: 3000, gel: 'none', diffusion: 'none',
-      beam: 100, softness: 1, size: [0.3, 0.3], barnDoors: { top: 0, bottom: 0, left: 0, right: 0 }, on: true, origin: 'aggiunta',
+      beam: 75, softness: 1, size: [0.3, 0.3], barnDoors: { top: 0, bottom: 0, left: 0, right: 0 }, on: true, origin: 'aggiunta',
     }));
   }
 
@@ -1115,6 +1115,9 @@ export class Engine {
       const skyLux = (s.enabled ? sk.skyLux : 0.3) * gain;
       const groundLux = (on ? sk.sunLux * gain * Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation))) : 0) + skyLux;
       const skyCol = lightColor(sk.skyK, 'none');
+      // three converte lo sfondo equirettangolare in una cubemap e la tiene in cache per texture
+      // (senza guardare la versione): liberarla fa ricostruire lo sfondo col cielo nuovo
+      if (this.skyTex) this.skyTex.dispose();
       this.skyTex = skyTexture(skyLux / Math.PI, skyCol, (0.18 * groundLux) / Math.PI, this.skyTex || undefined);
       this.scene.background = this.skyTex;
       this.scene.backgroundIntensity = 1;
@@ -1399,8 +1402,10 @@ export class Engine {
     this.dirty = true;
     // con una persona in quadro si espone per il volto (cartoncino grigio dal lato della chiave)
     const face = this.built ? this.faceLux() : 0;
-    if (face > 0.5) return this.settingsFor(1.3 * Math.PI / face);
-    return this.settingsFor(0.2 / M);
+    // esterni di notte: si espone per una notte (volto 1,5 stop sotto il grigio medio, il buio resta buio)
+    const under = this.outdoor ? Math.pow(2, -1.5 * this.nightFactor(this.snapshot.sun)) : 1;
+    if (face > 0.5) return this.settingsFor(under * 1.3 * Math.PI / face);
+    return this.settingsFor(under * 0.2 / M);
   }
 
   settingsFor(e: number) {

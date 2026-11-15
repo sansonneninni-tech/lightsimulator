@@ -6,7 +6,7 @@ import { RoomSpec, Opening, WallId, fitOpening, windowInfos, wallFrame, OPENING_
 import { FurnitureState, furnitureKind, footprint, lampWorld, FURNITURE } from './engine/furniture';
 import { LightState, makeLight, newId, illuminanceAt } from './engine/photometry';
 import { defaultSun, sunAngles, SunState } from './engine/sun';
-import { groundHeight, hasFacades } from './engine/outdoor';
+import { groundHeight, hasFacades, CITY } from './engine/outdoor';
 import { PersonState, poseJoints } from './engine/mannequin';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -379,6 +379,12 @@ export function addFurniture(kind: string) {
   if (k.wall != null && e) {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion).setY(0).normalize();
     pos = e.camera.position.clone().setY(0).addScaledVector(fwd, 30);
+    if (s.room.outdoor) {
+      // in città: dove lo sguardo incontra la facciata (guardando lungo la strada, la più vicina, poco avanti)
+      const c = e.camera.position;
+      if (Math.abs(fwd.x) > 0.15) pos = c.clone().setY(0).addScaledVector(fwd, (Math.sign(fwd.x) * CITY.facade - c.x) / fwd.x);
+      else pos = new THREE.Vector3(c.x < 0 ? -CITY.facade : CITY.facade, 0, c.z + fwd.z * 6);
+    }
   }
   let f: FurnitureState = { id: newId('m'), kind, position: [pos.x, 0, pos.z], rotationY: rot, color: k.finishes[0] || '' };
   if (k.onTop) {
