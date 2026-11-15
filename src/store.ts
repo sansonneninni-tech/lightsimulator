@@ -68,6 +68,7 @@ interface Store extends SceneSnapshot {
   shots: Shot[];
   shooting: number; // 0 = no, 0..1 progresso
   camMove: import('./engine/camMove').CamMove | null; // movimento di camera scelto (null = camera ferma)
+  creator: string | null; // persona di cui si sta creando l'aspetto
   abCur: 'A' | 'B'; // confronto A/B: versione attiva delle luci
   abOther: import('./engine/photometry').LightState[] | null; // l'altra versione
   past: string[];
@@ -114,6 +115,7 @@ export const useStore = create<Store>((set, get) => ({
   shooting: 0,
   camMove: null,
   abCur: 'A',
+  creator: null,
   abOther: null,
   past: [],
   future: [],

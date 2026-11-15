@@ -180,6 +180,7 @@ export function PersonCard({ id }: { id: string }) {
       <div className="poses" style={{ marginBottom: 14 }}>
         {POSES.map((q) => <button key={q.id} className={`pose ${P.pose === q.id ? 'on' : ''}`} onClick={() => { snap(); up({ pose: q.id as PoseId, joints: poseJoints(q.id as PoseId) }); }}><Svg d={POSE_ICONS[q.id]} vb="0 0 28 36" />{q.name}</button>)}
       </div>
+      <button className="btn primary cr-open" onClick={() => useStore.setState({ creator: id })}>Crea il personaggio…</button>
       <div className="row">
         <div className="k"><span>Persona</span></div>
         <div className="chips">{(['uomo', 'donna'] as const).map((f) => <button key={f} className={`chip ${(P.figure || 'uomo') === f ? 'on' : ''}`} onClick={() => { snap(); up({ figure: f }); }}>{f === 'uomo' ? 'Uomo' : 'Donna'}</button>)}</div>

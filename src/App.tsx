@@ -7,6 +7,7 @@ import Handles from './ui/Handles';
 import { SelectionCard } from './ui/Cards';
 import { LightsPanel, PeoplePanel, CameraPanel, SkyPanel, PlaceMenu, PanelId } from './ui/Panels';
 import { Roll, Viewer } from './ui/Viewer';
+import Creator from './ui/Creator';
 import { loadPhotos, saveProject, openProject, loadSample, snapshotOf } from './project';
 import { addLightAtScreen, addLight, removeSelection, clampToRoom } from './actions';
 import { Start, RoomPanel, FurnitureCard, OpeningCard } from './ui/Room';
@@ -314,6 +315,7 @@ export default function App() {
           {panel === 'sky' && <SkyPanel onClose={() => setPanel(null)} />}
           {panel === 'place' && <PlaceMenu onClose={() => setPanel(null)} onNew={() => useStore.setState({ phase: 'empty', selection: null, manikin: null })} onSave={saveProject} onOpen={() => projRef.current?.click()} />}
           <Viewer />
+          <Creator />
         </>
       )}
       <div id="toast" className={`glass ${toastOn ? 'show' : ''}${toast?.undo ? ' act' : ''}`}>{toast?.text}{toast?.undo && <button onClick={() => { useStore.getState().undo(); setToastOn(false); }}>Annulla</button>}</div>

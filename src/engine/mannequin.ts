@@ -28,6 +28,7 @@ export interface PersonState {
   joints: JointRot;  // rotazioni personalizzate (manichino)
   skin: string;
   figure?: 'uomo' | 'donna';
+  look?: import('./human').Look; // aspetto del personaggio (vuoto = predefinito per uomo/donna e pelle)
   height: number;    // metri
 }
 

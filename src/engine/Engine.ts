@@ -2008,7 +2008,8 @@ export class Engine {
     const smp = this.pt.samples;
     const elapsed = (performance.now() - sh.start) / 1000;
     const cap = Number(new URLSearchParams(location.search).get('cap')) || (this.built ? 45 : 120);
-    const p = Math.min(1, Math.max(smp / sh.target, elapsed / cap));
+    // mai chiudere prima di un passaggio completo: con i riquadri a metà resterebbero zone nere
+    const p = smp < 1 ? Math.min(0.98, elapsed / cap) : Math.min(1, Math.max(smp / sh.target, elapsed / cap));
     (window as any).__ptSamples = smp;
     sh.onProgress(Math.min(0.99, p));
     if (p >= 1) {
