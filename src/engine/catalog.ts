@@ -221,7 +221,7 @@ export const CATALOG: FurnitureKind[] = [
   {"id": "m-boombox", "name": "Stereo portatile", "cat": "decoro", "size": [0.579, 0.149], "height": 0.376, "model": "boombox", "finishes": [], "icon": "", "scale": 0.8, "onTop": true},
   {"id": "m-classic-laptop", "name": "Portatile anni Novanta", "cat": "decoro", "size": [0.326, 0.243], "height": 0.272, "model": "classic-laptop", "finishes": [], "icon": "", "scale": 0.5, "onTop": true},
   {"id": "m-vintage-video-camera", "name": "Cinepresa Super 8", "cat": "decoro", "size": [0.106, 0.2], "height": 0.217, "model": "vintage-video-camera", "finishes": [], "icon": "", "scale": 1.5, "onTop": true},
-  {"id": "m-standing-picture-frame-01", "name": "Cornice da tavolo", "cat": "decoro", "size": [0.1, 0.201], "height": 0.25, "model": "standing-picture-frame-01", "finishes": [], "icon": "", "onTop": true},
+  {"id": "m-standing-picture-frame-01", "name": "Cornice da tavolo", "cat": "decoro", "size": [0.201, 0.1], "height": 0.25, "model": "standing-picture-frame-01", "finishes": [], "icon": "", "onTop": true},
   {"id": "m-brass-vase-02", "name": "Brocca d'ottone", "cat": "decoro", "size": [0.209, 0.208], "height": 0.529, "model": "brass-vase-02", "finishes": [], "icon": "", "onTop": true},
   {"id": "m-brass-pot-02", "name": "Bacinella d'ottone", "cat": "decoro", "size": [0.366, 0.302], "height": 0.107, "model": "brass-pot-02", "finishes": [], "icon": "", "onTop": true},
   {"id": "m-bronze-ray-statue", "name": "Razza in bronzo", "cat": "decoro", "size": [0.707, 0.536], "height": 0.59, "model": "bronze-ray-statue", "finishes": [], "icon": "", "onTop": true},
