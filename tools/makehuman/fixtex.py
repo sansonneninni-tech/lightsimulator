@@ -3,7 +3,8 @@
 #   (altrimenti il fondo grigio della texture affiora lungo le cuciture, per esempio sul colletto);
 # - capelli, sopracciglia, ciglia: i pixel trasparenti prendono il colore dei peli vicini
 #   (altrimenti ai bordi del ritaglio compare un alone chiaro).
-# Va eseguito una sola volta, dopo convert.py e delogo.py. Uso: python3 tools/makehuman/fixtex.py public/human
+# Va eseguito una sola volta, dopo convert.py e delogo.py (prima di pack.py, ma legge anche i .bin compressi). Uso: python3 tools/makehuman/fixtex.py public/human
+import gzip
 import json
 import sys
 import cv2
@@ -11,6 +12,11 @@ import numpy as np
 
 D = sys.argv[1]
 man = json.load(open(f'{D}/base.json'))
+
+
+def readbin(f):
+    b = open(f, 'rb').read()
+    return gzip.decompress(b) if b[:2] == b'\x1f\x8b' else b
 
 
 def bleed(rgb, mask):
@@ -60,7 +66,7 @@ def fix_alpha(file):
 
 
 for it in man['items']:
-    buf = open(f"{D}/p-{it['kind']}-{it['name']}.bin", 'rb').read()
+    buf = readbin(f"{D}/p-{it['kind']}-{it['name']}.bin")
     uv = np.frombuffer(buf, np.float32, it['nr'] * 2, it['uv']).reshape(-1, 2)
     idx = np.frombuffer(buf, np.uint32, it['ni'], it['idx'])
     if it['kind'] in ('capelli', 'sopracciglia', 'ciglia'):
@@ -71,7 +77,7 @@ for it in man['items']:
             if f:
                 print(f, fix_opaque(f, uv, idx))
 
-base = open(f'{D}/base.bin', 'rb').read()
+base = readbin(f'{D}/base.bin')
 buv = np.frombuffer(base, np.float32, man['nr'] * 2, man['bodyUV']).reshape(-1, 2)
 bidx = np.frombuffer(base, np.uint32, man['ni'], man['bodyIdx'])
 for f in sorted(set(man['skins'].values())):

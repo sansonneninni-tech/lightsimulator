@@ -67,7 +67,12 @@ const packBufs = new Map<string, Promise<ArrayBuffer>>();
 const itemBufs = new Map<string, Promise<ArrayBuffer>>();
 const texCache = new Map<string, Promise<THREE.Texture>>();
 
-const getBin = (f: string) => fetch(BASE() + f).then((r) => { if (!r.ok) throw new Error(f); return r.arrayBuffer(); });
+// i .bin sono compressi con gzip (tools/makehuman/pack.py): il sito di pubblicazione non li comprime da sé
+const getBin = (f: string) => fetch(BASE() + f).then((r) => { if (!r.ok) throw new Error(f); return r.arrayBuffer(); }).then((b) => {
+  const h = new Uint8Array(b, 0, 2);
+  if (h[0] !== 0x1f || h[1] !== 0x8b) return b;
+  return new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+});
 
 export function humanManifest() { return man; }
 
