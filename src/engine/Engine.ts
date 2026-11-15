@@ -1379,7 +1379,7 @@ export class Engine {
 
   bindNav() {
     const el = this.renderer.domElement;
-    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; grab?: Grab | null; touch?: boolean } | null = null;
+    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; alt?: boolean; grab?: Grab | null; touch?: boolean } | null = null;
     // dita sullo schermo: due dita = pizzico per avanzare/arretrare e trascinamento per spostarsi
     const touches = new Map<number, { x: number; y: number }>();
     let pinch: { d: number; x: number; y: number; a: number } | null = null;
@@ -1389,6 +1389,7 @@ export class Engine {
     };
     // con le dita la visuale gira attorno a ciò che si sta guardando (perno al centro dell'inquadratura)
     let pivot: THREE.Vector3 | null = null;
+    let wheelPivotT: any = 0;
     const findPivot = () => {
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
       // una persona vicino al centro dell'inquadratura fa da perno (all'altezza del petto, sulla linea di vista)
@@ -1446,9 +1447,9 @@ export class Engine {
         }
         if (touches.size > 2) return;
       }
-      const grab = e.button === 0 ? this.onGrab?.(e) : null;
+      const grab = e.button === 0 && !e.altKey ? this.onGrab?.(e) : null;
       pivot = null;
-      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, grab, touch: e.pointerType === 'touch' };
+      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, alt: e.altKey, grab, touch: e.pointerType === 'touch' };
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
@@ -1480,13 +1481,13 @@ export class Engine {
       }
       drag.moved = true;
       drag.x = e.clientX; drag.y = e.clientY;
-      if (drag.touch) {
-        // un dito: si gira attorno a ciò che si guarda, in orizzontale e in verticale
+      if (drag.touch || drag.btn === 2 || (drag.alt && !drag.shift)) {
+        // un dito, tasto destro o Alt: si gira attorno a ciò che si guarda, in orizzontale e in verticale
         const k = Math.PI / Math.max(320, this.container.clientWidth);
         orbit(-dx * k, dy * k * 0.6);
         return;
       }
-      if (drag.btn === 2 || drag.btn === 1 || drag.shift) {
+      if (drag.btn === 1 || drag.shift) {
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
         const up = new THREE.Vector3(0, 1, 0);
         this.camera.position.addScaledVector(right, -dx * 0.006).addScaledVector(up, dy * 0.006);
@@ -1516,6 +1517,14 @@ export class Engine {
     el.addEventListener('wheel', (e) => {
       if (!this.navEnabled) return;
       e.preventDefault();
+      // trackpad, due dita in orizzontale: si gira attorno a ciò che si guarda (asse verticale)
+      if (!e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.2) {
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+        if (!wheelPivotT) pivot = null;
+        clearTimeout(wheelPivotT); wheelPivotT = setTimeout(() => { wheelPivotT = 0; pivot = null; }, 350);
+        orbit(e.deltaX * unit * Math.PI / Math.max(320, this.container.clientWidth), 0);
+        return;
+      }
       this.wheelZoom(e);
     }, { passive: false });
     el.addEventListener('dblclick', (e) => this.onDoubleClick?.(e));

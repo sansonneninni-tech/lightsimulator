@@ -304,7 +304,7 @@ export default function App() {
           {cam.falseColor ? (
             <div id="legend" className="glass chrome">{FC_LEGEND.map(([c, n]) => <span key={n}><i style={{ background: c }} />{n}</span>)}</div>
           ) : help && (
-            <div id="help" className="chrome">Trascina per guardarti intorno · rotella o pizzico per avvicinarti e allontanarti (anche fuori dalla stanza)<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · F: vista iniziale</div>
+            <div id="help" className="chrome">Trascina: guardati intorno · tasto destro o Alt: gira attorno<br />Rotella: avvicinati · Maiusc + trascina: spostati<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · F: vista iniziale</div>
           )}
           <Roll />
           <SelectionCard />
