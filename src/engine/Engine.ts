@@ -2039,7 +2039,15 @@ export class Engine {
       const fs4 = fs3.replace('gl_FragColor.a *= opacity;',
         'if ( any( isnan( gl_FragColor ) ) || any( isinf( gl_FragColor ) ) ) gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );\n\t\t\t\t\tgl_FragColor.a *= opacity;');
       if (fs4 === fs3) console.warn('patch campioni rovinati non applicata');
-      ptm.fragmentShader = fs4; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
+      // lampade dei modelli (castShadow = false): il raggio verso la lampadina le attraversa senza
+      // consumare i passaggi del percorso. Prima un lampione o una lanterna con molte facce (vetro,
+      // cappello, staffa) esauriva i passaggi e la lampadina restava "in ombra" dentro il suo stesso
+      // corpo: sul muro comparivano grandi coni scuri e la sagoma della staffa
+      const fs5 = fs4.replace('for ( int i = 0; i < traversals; i ++ ) {', 'int shadowSkips = 0;\n\t\tfor ( int i = 0; i < traversals; i ++ ) {')
+        .replace(/if \( ! material\.castShadow && isShadowRay \) \{\s*continue;\s*\}/,
+          'if ( ! material.castShadow && isShadowRay ) { if ( shadowSkips < 32 ) { shadowSkips ++; i --; } continue; }');
+      if (!fs5.includes('shadowSkips ++')) console.warn('patch lampade trasparenti all\'ombra non applicata');
+      ptm.fragmentShader = fs5; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
     }
     // leggero per la scheda video: al massimo ~0,9 megapixel calcolati (il resto lo fa il filtro
     // del rumore e l'ingrandimento), a pezzetti piccoli così il computer resta reattivo
@@ -2145,6 +2153,14 @@ export class Engine {
       // le pareti "matte" (tolte per guardare dentro) non si vedono neanche qui
       const mattes: THREE.Object3D[] = [];
       this.scene.traverse((o: any) => { if (o.isMesh && o.visible && o.material?.matte) { o.visible = false; mattes.push(o); } });
+      // vetri e oggetti molto trasparenti (doccia, vetrine, bicchieri): nello scatto si vede quello che
+      // c'è dietro, quindi anche le guide del filtro devono vedere dietro. Prima il vetro entrava come
+      // superficie piena e il filtro spalmava la luce dietro di lui in una lastra uniforme (doccia opaca)
+      this.scene.traverse((o: any) => {
+        if (!o.isMesh || !o.visible || Array.isArray(o.material) || o.userData.bulb || o.userData.glow || o.name === 'vetro') return;
+        const m = o.material as any;
+        if ((m.transmission > 0 && !m.emissiveMap) || (m.transparent && m.opacity < 0.6)) { o.visible = false; mattes.push(o); }
+      });
       restoreMattes = () => { for (const o of mattes) o.visible = true; };
       // colore delle superfici
       const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
@@ -2152,7 +2168,8 @@ export class Engine {
       this.scene.traverse((o: any) => {
         if (!o.isMesh || Array.isArray(o.material)) return;
         const m = o.material as THREE.MeshStandardMaterial;
-        const b = new THREE.MeshBasicMaterial({ color: m.color ? m.color.clone() : new THREE.Color(1, 1, 1), map: m.map || null, side: m.side, visible: m.visible });
+        // alphaTest: i buchi delle reti e delle foglie restano buchi anche nella guida del colore
+        const b = new THREE.MeshBasicMaterial({ color: m.color ? m.color.clone() : new THREE.Color(1, 1, 1), map: m.map || null, side: m.side, visible: m.visible, alphaTest: m.alphaTest || 0 });
         if (m.emissiveIntensity > 0 && !m.map && (m.color?.r ?? 1) > 0.8) b.color.setRGB(1, 1, 1);
         swapped.push([o, o.material]); basics.push(b);
         o.material = b;
