@@ -190,7 +190,9 @@ const SEASONS = [{ n: 'Inverno', d: 355 }, { n: 'Primavera', d: 80 }, { n: 'Esta
 
 export function SkyPanel({ onClose }: { onClose: () => void }) {
   const sun = useStore((s) => s.sun);
-  const hasWindows = useStore((s) => (s.room ? s.room.openings.some((o) => o.kind !== 'porta') : !!s.recon?.windows.length));
+  const outdoor = useStore((s) => !!s.room?.outdoor);
+  // all'aperto il sole arriva ovunque, come se fosse tutta finestra
+  const hasWindows = useStore((s) => (s.room ? !!s.room.outdoor || s.room.openings.some((o) => o.kind !== 'porta') : !!s.recon?.windows.length));
   const built = useStore((s) => !!s.room);
   const hasPeople = useStore((s) => s.people.length > 0);
   // a che ora il sole arriva sul viso della persona scelta (o della prima)
@@ -200,7 +202,7 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
     if (!e || !id) return;
     const P = st.people.find((p) => p.id === id)!;
     const r = e.sunOnFace(id, { ...st.sun, enabled: true });
-    if (!r) { st.showToast(`In questo giorno il sole non arriva mai sul viso di ${P.name}. Prova un'altra stagione, gira la stanza (Da dove entra il sole) o avvicina la persona alla finestra.`); return; }
+    if (!r) { st.showToast(`In questo giorno il sole non arriva mai sul viso di ${P.name}. ${outdoor ? 'Gira la persona verso il sole, prova un\'altra stagione o ruota il set (Da dove arriva il sole).' : 'Prova un\'altra stagione, gira la stanza (Da dove entra il sole) o avvicina la persona alla finestra.'}`); return; }
     st.snapshot(); set({ hour: Math.round(r.best * 12) / 12, enabled: true });
     st.showToast(r.to - r.from < 0.1 ? `Il sole arriva sul viso di ${P.name} solo verso le ${fmtHour(r.best)}.` : `Il sole è sul viso di ${P.name} dalle ${fmtHour(r.from)} alle ${fmtHour(r.to)}. Messo alle ${fmtHour(r.best)}.`);
   };
@@ -254,10 +256,10 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
           {([['Mattina', rise + 1.5], ['Mezzogiorno', (rise + setH) / 2], ['Tramonto', setH - 0.4], ['Ora blu', setH + 0.45], ['Notte', Math.min(23.5, setH + 3)]] as [string, number][]).map(([n, h]) => (
             <button key={n} className={`chip ${Math.abs(sun.hour - h) < 0.2 ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ hour: Math.round(h * 12) / 12, enabled: true }); }}>{n}</button>
           ))}
-          {hasWindows && hasPeople && <button className="chip" title="Trova a che ora il sole entra e arriva sul viso" onClick={sunOnFace}>Sole sul viso</button>}
+          {hasWindows && hasPeople && <button className="chip" title={outdoor ? 'Trova a che ora il sole arriva sul viso' : 'Trova a che ora il sole entra e arriva sul viso'} onClick={sunOnFace}>Sole sul viso</button>}
         </div>
       </div>
-      {built && hasWindows && <ShutterRow />}
+      {built && hasWindows && !outdoor && <ShutterRow />}
       <div className="row">
         <div className="chips">{WEATHER.map((w) => <button key={w.id} className={`chip ${sun.weather === w.id ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ weather: w.id }); }}>{w.name}</button>)}</div>
       </div>
@@ -266,9 +268,9 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
         <div className="chips">{SEASONS.map((s) => <button key={s.n} className={`chip ${Math.abs(sun.dayOfYear - s.d) < 46 || Math.abs(sun.dayOfYear - s.d) > 319 ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ dayOfYear: s.d }); }}>{s.n}</button>)}</div>
       </div>
       <div className="row" style={{ marginBottom: 0 }}>
-        <div className="k"><span>Da dove entra il sole</span><b className="num">{Math.round(((sun.north % 360) + 360) % 360)}°</b></div>
+        <div className="k"><span>{outdoor ? 'Da dove arriva il sole' : 'Da dove entra il sole'}</span><b className="num">{Math.round(((sun.north % 360) + 360) % 360)}°</b></div>
         <input type="range" min={0} max={359} step={1} value={((sun.north % 360) + 360) % 360} onPointerDown={() => useStore.getState().snapshot()} onChange={(e) => set({ north: +e.target.value })} />
-        <div className="hint">Ruota l'orientamento della stanza rispetto al nord.</div>
+        <div className="hint">{outdoor ? 'Ruota il set rispetto al nord.' : 'Ruota l\'orientamento della stanza rispetto al nord.'}</div>
       </div>
     </Pop>
   );

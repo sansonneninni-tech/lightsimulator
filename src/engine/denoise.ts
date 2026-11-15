@@ -24,7 +24,7 @@ void main(){
     for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += irr(vUv + vec2(float(i), float(j)) * texel);
     c = s / 8.0;
   }
-  if (d > 500.0) { gl_FragColor = vec4(c, 0.0); return; }
+  if (d > 1.0e6) { gl_FragColor = vec4(c, 0.0); return; }
   // varianza locale della luminanza (3x3) e taglio dei puntini isolati
   float m = 0.0, m2 = 0.0, mx = 0.0;
   for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
@@ -49,7 +49,7 @@ float lum(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 void main(){
   vec4 cp = texture2D(tIn, vUv);
   float zp = texture2D(tDist, vUv).r;
-  if (zp > 500.0) { gl_FragColor = cp; return; }
+  if (zp > 1.0e6) { gl_FragColor = cp; return; }
   vec3 np = texture2D(tNrm, vUv).rgb * 2.0 - 1.0;
   // varianza ammorbidita 3x3
   float vb = 0.0;
@@ -62,7 +62,7 @@ void main(){
     vec2 uv = vUv + vec2(float(i), float(j)) * texel * stepW;
     vec4 cq = texture2D(tIn, uv);
     float zq = texture2D(tDist, uv).r;
-    if (zq > 500.0) continue;
+    if (zq > 1.0e6) continue;
     vec3 nq = texture2D(tNrm, uv).rgb * 2.0 - 1.0;
     float h = k[abs(i)] * k[abs(j)];
     float wz = exp(-abs(zp - zq) / (0.012 * zp * stepW + 0.002));
@@ -82,7 +82,7 @@ varying vec2 vUv;
 void main(){
   vec3 c = texture2D(tIn, vUv).rgb;
   vec3 e = texture2D(tEmit, vUv).rgb;
-  if (texture2D(tDist, vUv).r > 500.0) { gl_FragColor = vec4(c + e, 1.0); return; }
+  if (texture2D(tDist, vUv).r > 1.0e6) { gl_FragColor = vec4(c + e, 1.0); return; }
   gl_FragColor = vec4(c * max(texture2D(tAlb, vUv).rgb, vec3(0.03)) + e, 1.0);
 }`;
 

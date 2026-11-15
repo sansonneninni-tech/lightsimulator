@@ -7,7 +7,8 @@ import { Svg, Del } from './icons';
 import { edgePoint } from './Handles';
 import { TEMPLATES, Template, createRoom, updateRoom, addOpening, updateOpening, addFurniture, moveFurniture, duplicateFurniture, removeFurniture, removeOpening } from '../build';
 import { ALL_FURNITURE, CATEGORIES, FINISHES, furnitureKind } from '../engine/furniture';
-import { WALL_FINISHES, FLOORS, OPENING_KINDS, WALLS, RoomSpec } from '../engine/room';
+import { WALL_FINISHES, FLOORS, OPENING_KINDS, WALLS, RoomSpec, OutdoorKind } from '../engine/room';
+import { OUTDOORS } from '../engine/outdoor';
 import { stopsLabel } from '../export/exports';
 import { TOUCH } from './touch';
 
@@ -19,7 +20,15 @@ const OPENING_ICONS: Record<string, string> = {
   porta: '<rect x="7" y="3" width="10" height="18"/><path d="M14.5 12h.01"/>',
 };
 
+// esterni: un segno del luogo al posto della pianta
+const OUTDOOR_ICONS: Record<OutdoorKind, string> = {
+  deserto: '<path d="M3 25c5-6 9-8 14-4 3-5 9-7 16-1" /><path d="M3 30c6-3 12-3 18 0s9 2 12 0" /><circle cx="25" cy="9" r="3"/>',
+  spiaggia: '<circle cx="18" cy="12" r="3.2"/><path d="M3 19h30" /><path d="M3 24c3-2 6-2 9 0s6 2 9 0 6-2 9 0 3 1 3 1" /><path d="M3 29c3-2 6-2 9 0s6 2 9 0 6-2 9 0" />',
+  citta: '<path d="M4 31V12h7v19M11 31V6h8v25M19 31V14h6v17M25 31V9h7v22" /><path d="M7 16h1M7 21h1M14 10h1M14 15h1M14 20h1M28 13h1M28 18h1M22 18h0" />',
+};
+
 function planIcon(t: Template) {
+  if (t.room.outdoor) return OUTDOOR_ICONS[t.room.outdoor];
   const { width: W, depth: D } = t.room;
   const s = 30 / Math.max(W, D);
   const w = W * s, d = D * s, x0 = (36 - w) / 2, y0 = (36 - d) / 2;
@@ -39,14 +48,14 @@ export function Start({ onOpen }: { onOpen: () => void }) {
   return (
     <div id="start">
       <div className="brand">Light Simulator</div>
-      <h1>Scegli la stanza</h1>
+      <h1>Scegli il set</h1>
       <p>Poi cambi misure, pareti, finestre e arredi, metti persone e luci, e scatti il render.</p>
       <div className="tiles">
         {TEMPLATES.map((t) => (
           <button key={t.id} className="tile" onClick={() => createRoom(t)}>
             <svg viewBox="0 0 36 36" dangerouslySetInnerHTML={{ __html: planIcon(t) }} />
             <b>{t.name}</b>
-            <span className="num">{t.room.width.toLocaleString('it-IT')} × {t.room.depth.toLocaleString('it-IT')} m</span>
+            <span className="num">{t.room.outdoor ? 'Esterno' : `${t.room.width.toLocaleString('it-IT')} × ${t.room.depth.toLocaleString('it-IT')} m`}</span>
           </button>
         ))}
       </div>
@@ -86,7 +95,7 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={372} onClose={onClose}>
       <div className="seg">
         <button className={tab === 'arredi' ? 'on' : ''} onClick={() => setTab('arredi')}>Arredi</button>
-        <button className={tab === 'stanza' ? 'on' : ''} onClick={() => setTab('stanza')}>Stanza</button>
+        <button className={tab === 'stanza' ? 'on' : ''} onClick={() => setTab('stanza')}>{room.outdoor ? 'Luogo' : 'Stanza'}</button>
       </div>
       {tab === 'arredi' ? (
         <>
@@ -101,7 +110,20 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          <div className="hint">{cat === 'pareti' ? 'Va sulla parete che stai guardando. Trascinalo per spostarlo lungo le pareti.' : cat === 'luci' ? 'Le lampade fanno luce vera: regolala nel pannello Luci.' : cat === 'decoro' ? 'Si appoggia sul mobile più vicino, se c\'è.' : 'Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi.'}</div>
+          <div className="hint">{room.outdoor && cat === 'pareti' ? (room.outdoor === 'citta' ? 'Va sulla facciata più vicina. Trascinalo per spostarlo lungo la strada.' : 'Qui non ci sono pareti: quadri e specchi vanno in centro città, sulle facciate.') : room.outdoor && cat === 'luci' ? 'Le lampade a soffitto all\'aperto non si possono appendere; quelle da terra e da tavolo sì.' : cat === 'pareti' ? 'Va sulla parete che stai guardando. Trascinalo per spostarlo lungo le pareti.' : cat === 'luci' ? 'Le lampade fanno luce vera: regolala nel pannello Luci.' : cat === 'decoro' ? 'Si appoggia sul mobile più vicino, se c\'è.' : 'Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi.'}</div>
+        </>
+      ) : room.outdoor ? (
+        <>
+          <div className="row">
+            <div className="k"><span>Luogo</span></div>
+            <div className="chips">
+              {OUTDOORS.map((o) => <button key={o.id} className={`chip ${room.outdoor === o.id ? 'on' : ''}`} onClick={() => { if (room.outdoor === o.id) return; useStore.getState().snapshot(); up({ outdoor: o.id, ...(o.id === 'citta' ? { width: 14 } : room.outdoor === 'citta' ? { width: o.id === 'deserto' ? 24 : 20 } : {}) }); if (OUTDOORS.some((x) => x.name === useStore.getState().placeName)) useStore.setState({ placeName: o.name }); }}>{o.name}</button>)}
+            </div>
+            <div className="hint">{OUTDOORS.find((o) => o.id === room.outdoor)?.ground}. Sole e cielo illuminano tutto il set.</div>
+          </div>
+          {room.outdoor !== 'citta' && <Slider label="Larghezza del set" value={room.width} min={6} max={40} step={0.5} onChange={(v) => up({ width: v })} />}
+          <Slider label="Profondità del set" value={room.depth} min={6} max={30} step={0.5} onChange={(v) => up({ depth: v })} />
+          <div className="hint" style={{ marginBottom: 0 }}>{room.outdoor === 'citta' ? 'Il set va da una facciata all\'altra della strada: persone e arredi restano tra i palazzi.' : 'È l\'area in cui stanno persone e arredi; il paesaggio continua fino all\'orizzonte.'}</div>
         </>
       ) : (
         <>
@@ -183,7 +205,7 @@ export function FurnitureCard({ id }: { id: string }) {
           <button className="btn" onClick={() => useStore.setState({ selection: { type: 'light', id: light.id } })}>Regola la luce</button>
         </div>
       )}
-      <div className="hint">{k.wall != null ? 'Trascinalo per spostarlo lungo le pareti.' : TOUCH ? 'Trascinalo per spostarlo.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
+      <div className="hint">{k.wall != null ? (useStore.getState().room?.outdoor ? 'Trascinalo per spostarlo lungo la facciata.' : 'Trascinalo per spostarlo lungo le pareti.') : TOUCH ? 'Trascinalo per spostarlo.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
       <div className="hr" />
       <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
     </Pop>

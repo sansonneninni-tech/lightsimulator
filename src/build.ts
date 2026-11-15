@@ -5,7 +5,8 @@ import { eng } from './engineRef';
 import { RoomSpec, Opening, WallId, fitOpening, windowInfos, wallFrame, OPENING_KINDS, roomBounds } from './engine/room';
 import { FurnitureState, furnitureKind, footprint, lampWorld, FURNITURE } from './engine/furniture';
 import { LightState, makeLight, newId, illuminanceAt } from './engine/photometry';
-import { defaultSun, sunAngles } from './engine/sun';
+import { defaultSun, sunAngles, SunState } from './engine/sun';
+import { groundHeight, hasFacades, CITY } from './engine/outdoor';
 import { PersonState, poseJoints } from './engine/mannequin';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -20,6 +21,11 @@ export interface Template {
   people?: { pose: PersonState['pose']; x: number; z: number; rot: number }[];
   lights?: { type: string; pos: [number, number, number]; target: [number, number, number] }[];
   hour?: number;
+  // esterni: ora del pomeriggio in cui il sole è a questa altezza (gradi), e da dove arriva
+  // (azimut nella scena: 0 = davanti alla camera, 90 = destra, 180 = alle spalle)
+  sunElev?: number;
+  sunFrom?: number;
+  view?: { pos: [number, number, number]; look: [number, number, number] }; // vista iniziale
 }
 
 const win = (wall: WallId, offset: number, width = 1.2, height = 1.4, sill = 0.9): Omit<Opening, 'id'> => ({ kind: 'finestra', wall, offset, width, height, sill });
@@ -93,6 +99,33 @@ export const TEMPLATES: Template[] = [
     room: { width: 5, depth: 4, height: 2.8, wall: 'bianco', floor: 'rovere', openings: [win('fondo', 0, 1.4, 1.5, 0.85), door('destra', 1.2)] },
     furniture: [],
   },
+  {
+    id: 'deserto', name: 'Deserto',
+    room: { width: 24, depth: 18, height: 8, wall: 'bianco', floor: 'cemento', openings: [], outdoor: 'deserto' },
+    furniture: [],
+    people: [{ pose: 'piedi', x: 0, z: -1, rot: 0 }],
+    sunElev: 8, sunFrom: 145,
+  },
+  {
+    id: 'spiaggia', name: 'Spiaggia',
+    room: { width: 20, depth: 12, height: 8, wall: 'bianco', floor: 'cemento', openings: [], outdoor: 'spiaggia' },
+    furniture: [['m-plastic-monobloc-chair-01', 2.4, -1.6, -30]],
+    people: [{ pose: 'piedi', x: 0, z: -1, rot: 0 }],
+    sunElev: 6, sunFrom: 70,
+  },
+  {
+    id: 'citta', name: 'Centro città',
+    room: { width: 14, depth: 18, height: 8, wall: 'bianco', floor: 'cemento', openings: [], outdoor: 'citta' },
+    furniture: [
+      ['m-round-wooden-table-02', -5.5, -6, 0],
+      ['m-plastic-monobloc-chair-01', -5.5, -5.15, 180],
+      ['m-plastic-monobloc-chair-01', -4.7, -6.6, 120],
+      ['m-potted-plant-01', -6.5, -8.2, 0],
+    ],
+    people: [{ pose: 'piedi', x: -4.4, z: -2.6, rot: 25 }],
+    sunElev: 14, sunFrom: 178,
+    view: { pos: [-1.3, 1.6, 4], look: [-4.2, 1.3, -3] },
+  },
 ];
 
 // ---------------- luci legate alla stanza ----------------
@@ -150,6 +183,16 @@ export function orientSunFor(room: RoomSpec, hour = 10.5) {
   return { ...sun, north: (((azScene - azimuth) % 360) + 360) % 360 };
 }
 
+// esterni: il sole all'altezza scelta nel pomeriggio, dalla direzione scelta nella scena
+export function orientSunOutdoor(elev: number, from: number): SunState {
+  const sun = { ...defaultSun(), enabled: true, weather: 'sereno' as const };
+  let hour = 12;
+  for (let h = 12; h < 21; h += 1 / 60) if (sunAngles(h, sun.dayOfYear, sun.latitude).elevation >= elev) hour = h; else if (h > 12.5) break;
+  hour = Math.round(hour * 12) / 12;
+  const { azimuth } = sunAngles(hour, sun.dayOfYear, sun.latitude);
+  return { ...sun, hour, north: (((from - azimuth) % 360) + 360) % 360 };
+}
+
 // ---------------- vincoli degli arredi ----------------
 export function clampFurniture(f: FurnitureState, room: RoomSpec, all: FurnitureState[]): FurnitureState {
   const b = roomBounds(room);
@@ -158,8 +201,9 @@ export function clampFurniture(f: FurnitureState, room: RoomSpec, all: Furniture
     // quadri e specchi: contro la parete più vicina, rivolti verso la stanza
     const [px, , pz] = f.position;
     const d = [pz - b.min[2], b.max[2] - pz, px - b.min[0], b.max[0] - px];
-    const i = d.indexOf(Math.min(...d));
-    const half = kw.size[0] / 2, t = kw.size[1] / 2 + 0.004;
+    // in città si appende sulle facciate ai lati della strada
+    const i = room.outdoor ? (px < 0 ? 2 : 3) : d.indexOf(Math.min(...d));
+    const half = kw.size[0] / 2, t = kw.size[1] / 2 + 0.004 + (room.outdoor ? 0.04 : 0); // in città: davanti alle vetrine
     const along = (v: number, lo: number, hi: number) => (hi - lo < kw.size[0] ? (lo + hi) / 2 : Math.min(hi - half - 0.02, Math.max(lo + half + 0.02, v)));
     const y = Math.max(0.05, Math.min(room.height - kw.height - 0.02, f.position[1] > 0 ? f.position[1] : kw.wall));
     // mai sopra finestre e porte: si sposta di lato, verso il bordo libero più vicino
@@ -186,8 +230,10 @@ export function clampFurniture(f: FurnitureState, room: RoomSpec, all: Furniture
   const x = Math.min(b.max[0] - hx - 0.01, Math.max(b.min[0] + hx + 0.01, f.position[0]));
   const z = Math.min(b.max[2] - hz - 0.01, Math.max(b.min[2] + hz + 0.01, f.position[2]));
   const k = furnitureKind(f.kind);
-  const y = k.onTop ? supportHeight(x, z, f.id, all) : 0;
-  return { ...f, position: [hx * 2 > b.max[0] - b.min[0] ? 0 : x, y, hz * 2 > b.max[2] - b.min[2] ? 0 : z] };
+  const fx = hx * 2 > b.max[0] - b.min[0] ? 0 : x, fz = hz * 2 > b.max[2] - b.min[2] ? 0 : z;
+  // esterni: appoggiato al terreno (in città la strada è un gradino sotto il marciapiede)
+  const y = (k.onTop ? supportHeight(x, z, f.id, all) : 0) + (room.outdoor ? groundHeight(room, fx, fz) : 0);
+  return { ...f, position: [fx, y, fz] };
 }
 
 // piano del mobile sotto il punto (per lampade da tavolo)
@@ -219,13 +265,14 @@ export async function createRoom(t: Template) {
     lights.push(L);
   }
   const people: PersonState[] = (t.people || []).map((p, i) => ({ id: newId('p'), name: `Persona ${i + 1}`, position: [p.x, 0, p.z], rotationY: p.rot, pose: p.pose, joints: poseJoints(p.pose), skin: 'media', height: 1.75 }));
-  const sun = orientSunFor(room, t.hour ?? 10.5);
+  const sun = room.outdoor ? orientSunOutdoor(t.sunElev ?? 30, t.sunFrom ?? 150) : orientSunFor(room, t.hour ?? 10.5);
   e.clearBuilt();
   useStore.setState({
     phase: 'ready', abCur: 'A', abOther: null, status: '', recon: null, photos: [], placeName: t.name, room, furniture, lights, people, props: [], sun,
-    cam: { ...defaultCam(), focal: 18 }, ambient: 0, shots: [], past: [], future: [], selection: null, manikin: null, meterPin: null, meter: false,
+    cam: { ...defaultCam(), focal: room.outdoor ? 28 : 18 }, ambient: 0, shots: [], past: [], future: [], selection: null, manikin: null, meterPin: null, meter: false,
   });
   e.apply(snapshotNow());
+  if (t.view) e.setHome(new THREE.Vector3(...t.view.pos), new THREE.Vector3(...t.view.look));
   e.resetView();
   await sleep(60);
   autoExpose();
@@ -252,17 +299,23 @@ export function updateRoom(patch: Partial<RoomSpec>, snapshot = true) {
   if (snapshot) s.snapshot();
   const room: RoomSpec = { ...s.room, ...patch };
   room.openings = room.openings.map((o) => fitOpening(room, o, room.openings));
-  let furniture = s.furniture.map((f) => clampFurniture(f, room, s.furniture));
+  // cambiando luogo all'aperto: via ciò che non ha dove stare (lampadari; quadri senza facciate)
+  const homeless = (f: FurnitureState) => { const k = furnitureKind(f.kind); return !!room.outdoor && (!!k.ceiling || (k.wall != null && !hasFacades(room))); };
+  const gone = s.furniture.filter(homeless);
+  if (gone.length) s.showToast(gone.length === 1 ? `${furnitureKind(gone[0].kind).name} tolto: qui non ha dove stare.` : `${gone.length} arredi tolti: qui non hanno dove stare.`);
+  const kept = s.furniture.filter((f) => !homeless(f));
+  let furniture = kept.map((f) => clampFurniture(f, room, kept));
   furniture = furniture.map((f) => clampFurniture(f, room, furniture));
   const lights = syncRoomLights(room, furniture, s.lights).map((L) => {
     if (L.origin === 'finestra' || L.attached) return L;
     const b = roomBounds(room);
     const p = L.position;
-    // le luci restano libere (anche fuori dalla stanza), entro 9 m
-    return { ...L, position: [Math.min(b.max[0] + 9, Math.max(b.min[0] - 9, p[0])), Math.min(b.max[1] + 6, p[1]), Math.min(b.max[2] + 9, Math.max(b.min[2] - 9, p[2]))] as [number, number, number] };
+    // le luci restano libere (anche fuori dalla stanza), entro 9 m (in esterni 40 m)
+    const m = room.outdoor ? 40 : 9;
+    return { ...L, position: [Math.min(b.max[0] + m, Math.max(b.min[0] - m, p[0])), Math.min(b.max[1] + 6, p[1]), Math.min(b.max[2] + m, Math.max(b.min[2] - m, p[2]))] as [number, number, number] };
   });
   const b = roomBounds(room);
-  const people = s.people.map((P) => ({ ...P, position: [Math.min(b.max[0] - 0.3, Math.max(b.min[0] + 0.3, P.position[0])), 0, Math.min(b.max[2] - 0.3, Math.max(b.min[2] + 0.3, P.position[2]))] as [number, number, number] }));
+  const people = s.people.map((P) => ({ ...P, position: [Math.min(b.max[0] - 0.3, Math.max(b.min[0] + 0.3, P.position[0])), room.outdoor ? P.position[1] : 0, Math.min(b.max[2] - 0.3, Math.max(b.min[2] + 0.3, P.position[2]))] as [number, number, number] }));
   useStore.setState({ room, furniture, lights, people });
 }
 
@@ -306,8 +359,11 @@ export function addFurniture(kind: string) {
   const s = useStore.getState();
   const e = eng();
   if (!s.room) return;
-  s.snapshot();
   const k = furnitureKind(kind);
+  // all'aperto non c'è soffitto, e pareti solo in città (le facciate)
+  if (s.room.outdoor && k.ceiling) { s.showToast(`${k.name}: all'aperto non c'è un soffitto a cui appenderlo.`); return; }
+  if (s.room.outdoor && k.wall != null && !hasFacades(s.room)) { s.showToast(`${k.name}: qui non ci sono pareti. In centro città va sulle facciate.`); return; }
+  s.snapshot();
   let pos = new THREE.Vector3(0, 0, 0), rot = 0;
   if (e) {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion); fwd.y = 0;
@@ -323,6 +379,12 @@ export function addFurniture(kind: string) {
   if (k.wall != null && e) {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion).setY(0).normalize();
     pos = e.camera.position.clone().setY(0).addScaledVector(fwd, 30);
+    if (s.room.outdoor) {
+      // in città: dove lo sguardo incontra la facciata (guardando lungo la strada, la più vicina, poco avanti)
+      const c = e.camera.position;
+      if (Math.abs(fwd.x) > 0.15) pos = c.clone().setY(0).addScaledVector(fwd, (Math.sign(fwd.x) * CITY.facade - c.x) / fwd.x);
+      else pos = new THREE.Vector3(c.x < 0 ? -CITY.facade : CITY.facade, 0, c.z + fwd.z * 6);
+    }
   }
   let f: FurnitureState = { id: newId('m'), kind, position: [pos.x, 0, pos.z], rotationY: rot, color: k.finishes[0] || '' };
   if (k.onTop) {

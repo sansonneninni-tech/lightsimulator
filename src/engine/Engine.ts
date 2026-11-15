@@ -18,6 +18,7 @@ import { denoise } from './denoise';
 import { Rigs } from './rigs';
 import { loadFigure, poseFigure, figureModel } from './figure';
 import { SKIN_MARK } from './human';
+import { buildOutdoor, OutdoorBuild, groundHeight, terrainHeight, CITY } from './outdoor';
 
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
@@ -97,7 +98,16 @@ void main(){
 }`;
 
 // profondità di campo: distanza dalla camera per pixel, poi sfocatura con il circolo di confusione
-const DIST_VERT = `varying float vD; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }`;
+// con lo scheletro: le persone (figure con ossa) vanno nella posa vera, non in quella di riposo a braccia aperte
+const DIST_VERT = `#include <common>
+#include <skinning_pars_vertex>
+varying float vD;
+void main(){
+  #include <skinbase_vertex>
+  #include <begin_vertex>
+  #include <skinning_vertex>
+  vec4 mv = modelViewMatrix * vec4(transformed, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv;
+}`;
 const DIST_FRAG = `varying float vD; void main(){ gl_FragColor = vec4(vD, 0.0, 0.0, 1.0); }`;
 const DOF_FRAG = `
 precision highp float;
@@ -169,6 +179,12 @@ export class Engine {
   props = new Map<string, { state: PropState; obj: THREE.Group }>();
   sun = new THREE.DirectionalLight(0xffffff, 0);
   ambient = new THREE.AmbientLight(0xffffff, 0);
+  // esterni: il cielo in anteprima (nello scatto è la mappa d'ambiente)
+  hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 0);
+  outdoor: OutdoorBuild | null = null;
+  sceneryLights: LightState[] = []; // lampioni accesi di notte (città)
+  skyView = 1;                      // frazione di cielo visibile al centro del set
+  waterEnv: THREE.DataTexture | null = null;
   snapshot: SceneSnapshot | null = null;
 
   exposure = 1;
@@ -247,7 +263,7 @@ export class Engine {
     (this.selBox.material as THREE.LineBasicMaterial).opacity = 0.55;
     this.scene.add(this.selBox);
     this.scene.add(this.rigs.group);
-    this.rasterLights.add(this.sun, this.sun.target, this.ambient);
+    this.rasterLights.add(this.sun, this.sun.target, this.ambient, this.hemi);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
     this.sun.shadow.bias = -0.0004;
@@ -329,6 +345,8 @@ export class Engine {
 
   // ---------------- ricostruzione ----------------
   loadRecon(recon: Reconstruction) {
+    this.camera.near = 0.03; this.camera.far = 200; this.camera.updateProjectionMatrix();
+    this.outdoor = null; this.sceneryLights = []; this.hemi.visible = false; this.sun.shadow.bias = -0.0004; this.skyView = 1;
     this.clearBuilt();
     this.picks = [];
     this.recon = recon;
@@ -549,16 +567,18 @@ export class Engine {
     this.fillMesh = null; this.material = null; this.blurMaterial = null; this.photoLin = null; this.emissiveCanvas = null;
     this.hasBase = false; this.quadMat.uniforms.relightW.value = 0;
     this.built = spec;
-    const { group, surfaces, picks } = buildRoom(spec);
+    this.outdoor = spec.outdoor ? buildOutdoor(spec) : null;
+    const { group, surfaces, picks } = this.outdoor ? { ...this.outdoor, picks: [] as THREE.Mesh[] } : buildRoom(spec);
     this.room.add(group);
     this.surfaces = surfaces;
     this.picks = picks;
     this.K = 1;
     // vista iniziale: da un angolo verso l'angolo opposto, come si entra in una stanza
+    // (in esterni: dal bordo del set verso il centro, all'altezza degli occhi)
     const W = spec.width, D = spec.depth;
     const m = Math.min(0.5, W * 0.1, D * 0.1);
-    const pos = new THREE.Vector3(W / 2 - m, Math.min(1.6, spec.height - 0.3), D / 2 - m);
-    const dir = new THREE.Vector3(-W * 0.22, 1.05, -D * 0.3).sub(pos);
+    const pos = spec.outdoor ? new THREE.Vector3(0.7, 1.6, Math.min(D / 2 - 0.5, 4.5)) : new THREE.Vector3(W / 2 - m, Math.min(1.6, spec.height - 0.3), D / 2 - m);
+    const dir = spec.outdoor ? new THREE.Vector3(0, 1.3, -1).sub(pos) : new THREE.Vector3(-W * 0.22, 1.05, -D * 0.3).sub(pos);
     this.homePose = {
       pos,
       quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.atan2(dir.y, Math.hypot(dir.x, dir.z)), Math.atan2(-dir.x, -dir.z), 0, 'YXZ')),
@@ -569,11 +589,80 @@ export class Engine {
     const size = new THREE.Vector3(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
     const r = size.length() / 2 + 0.6;
     const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
-    sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.1; sc.far = r * 4; sc.updateProjectionMatrix();
+    // esterni: si vede fino all'orizzonte (dune, palazzi in fondo alla strada, promontori)
+    this.camera.near = spec.outdoor ? 0.05 : 0.03; this.camera.far = spec.outdoor ? 4000 : 200; this.camera.updateProjectionMatrix();
+    if (spec.outdoor) {
+      // esterni: l'ombra copre il set e un po' attorno; parte da lontano, così anche i palazzi fanno ombra
+      const ro = spec.outdoor === 'citta' ? 45 : Math.hypot(spec.width, spec.depth) / 2 + 8;
+      sc.left = -ro; sc.right = ro; sc.top = ro; sc.bottom = -ro; sc.near = 1; sc.far = 700; sc.updateProjectionMatrix();
+      this.sun.shadow.bias = -0.012 / 700;
+      this.skyView = this.skyFraction(new THREE.Vector3(0, 1.5, 0), new THREE.Vector3(0, 1, 0), 128);
+    } else {
+      sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.1; sc.far = r * 4; sc.updateProjectionMatrix();
+      this.sun.shadow.bias = -0.0004;
+      this.skyView = 1;
+    }
     // le lampade appese seguono l'altezza del soffitto
     for (const [id, o] of this.furn) if (o.ceil !== spec.height) { this.scene.remove(o.obj); this.furn.delete(id); }
-    if (this.snapshot) this.syncSun(this.snapshot.sun);
+    if (this.snapshot) { this.syncLights(this.snapshot.lights, this.snapshot.sun); this.syncSun(this.snapshot.sun); }
     this.dirty = true;
+  }
+
+  // direzioni distribuite come il coseno attorno alla normale (sempre le stesse: letture stabili)
+  cosineDirs(n: THREE.Vector3, N: number) {
+    const t = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const a = t.clone().cross(n).normalize(), b = n.clone().cross(a);
+    const out: THREE.Vector3[] = [];
+    for (let i = 0; i < N; i++) {
+      const u = (i + 0.5) / N, phi = i * 2.399963;
+      const sr = Math.sqrt(u), cz = Math.sqrt(1 - u);
+      out.push(a.clone().multiplyScalar(sr * Math.cos(phi)).addScaledVector(b, sr * Math.sin(phi)).addScaledVector(n, cz));
+    }
+    return out;
+  }
+
+  // esterni: quanta parte di cielo vede un punto (pesata col coseno, come l'illuminamento)
+  skyFraction(p: THREE.Vector3, n: THREE.Vector3, N = 64) {
+    const rc = new THREE.Raycaster(); (rc as any).firstHitOnly = true; rc.far = 3000;
+    let free = 0;
+    for (const d of this.cosineDirs(n, N)) {
+      if (d.y <= 0) continue;
+      rc.set(p, d);
+      if (!rc.intersectObjects(this.surfaces, false).length) free++;
+    }
+    return free / N;
+  }
+
+  // esterni: illuminamento dal cielo e dalla luce rimbalzata dal terreno e dai palazzi su un punto,
+  // con le stesse radianze del cielo dello scatto (sono le direzioni libere a vedere il cielo)
+  skyIrradiance(p: THREE.Vector3, n: THREE.Vector3, s: SunState) {
+    const sk = sunSky(s);
+    const skyLux = s.enabled ? sk.skyLux : 0.3;
+    const skyNits = skyLux / Math.PI;
+    const { dir: sunDir } = sunDirection(s);
+    const sunOn = this.sun.visible ? this.sun.intensity : 0;
+    const rc = new THREE.Raycaster(); (rc as any).firstHitOnly = true;
+    const N = 48;
+    let sum = 0;
+    for (const d of this.cosineDirs(n, N)) {
+      rc.set(p, d); rc.far = 3000;
+      const h = rc.intersectObjects(this.surfaces, false)[0];
+      if (!h) {
+        sum += d.y > 0 ? skyNits * (0.75 + 0.5 * Math.pow(1 - d.y, 3)) : 0.18 * skyLux / Math.PI;
+        continue;
+      }
+      // superficie vista: la sua luce riflessa (sole se la prende, più il cielo)
+      const hn = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
+      if (hn.dot(d) > 0) hn.negate();
+      let E = 0.8 * skyLux * 0.75;
+      const c = hn.dot(sunDir);
+      if (sunOn > 0 && c > 0) {
+        rc.set(h.point.clone().addScaledVector(hn, 0.02), sunDir); rc.far = 600;
+        if (!rc.intersectObjects(this.surfaces, false).length) E += sunOn * c;
+      }
+      sum += ((h.object.userData.albedo ?? 0.3) * E) / Math.PI;
+    }
+    return (Math.PI * sum) / N;
   }
 
   syncFurniture(list: FurnitureState[]) {
@@ -892,10 +981,26 @@ export class Engine {
     }
   }
 
+  // lampioni della città: si accendono quando fa buio (luce vera, anche nell'esposimetro e nello scatto)
+  sceneryLightsFor(sun: SunState): LightState[] {
+    const lamps = this.outdoor?.lamps || [];
+    if (!lamps.length || this.nightFactor(sun) < 0.3) return [];
+    return lamps.map((l, i) => ({
+      id: `lampione${i}`, name: 'Lampione', fixtureId: 'fresnel-led-60', position: l.pos, target: l.target, stops: 0, kelvin: 3000, gel: 'none', diffusion: 'none',
+      beam: 75, softness: 1, size: [0.3, 0.3], barnDoors: { top: 0, bottom: 0, left: 0, right: 0 }, on: true, origin: 'aggiunta',
+    }));
+  }
+
+  nightFactor(sun: SunState) {
+    const { elevation } = sunDirection(sun);
+    return !sun.enabled ? 1 : 1 - THREE.MathUtils.smoothstep(elevation, -4, 3);
+  }
+
   syncLights(rawLights: LightState[], sun: SunState) {
-    const lights = this.resolveLights(rawLights);
+    this.sceneryLights = this.sceneryLightsFor(sun);
+    const lights = [...this.resolveLights(rawLights), ...this.sceneryLights];
     this.rigs.group.visible = !!this.built;
-    if (this.built) { this.rigs.floorY = this.bounds.min[1]; this.rigs.sync(rawLights); }
+    if (this.built) { const b = this.built; this.rigs.floorY = this.bounds.min[1]; this.rigs.groundAt = b.outdoor ? (x, z) => terrainHeight(b, x, z) : null; this.rigs.sync(rawLights); }
     this.glowFrames(lights);
     const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
     const skyK = sunSky(sun).skyK;
@@ -989,7 +1094,7 @@ export class Engine {
     const { dir, elevation } = sunDirection(s);
     const sk = sunSky(s);
     const gain = this.windowGain();
-    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && this.windowList().length > 0 && gain > 0;
+    const on = s.enabled && elevation > 0 && sk.sunLux > 0 && (!!this.built?.outdoor || this.windowList().length > 0) && gain > 0;
     this.sun.visible = on;
     this.sun.intensity = on ? sk.sunLux * gain : 0;
     this.sun.color.copy(lightColor(sk.sunK, 'none'));
@@ -1004,14 +1109,37 @@ export class Engine {
     for (const p of this.panes) {
       (p.mesh.material as THREE.MeshPhysicalMaterial).emissiveIntensity = this.K * Math.max(0.002, f);
     }
+    this.hemi.visible = false;
     // stanza costruita: cielo e terreno fuori dalle finestre
     if (this.built) {
       const skyLux = (s.enabled ? sk.skyLux : 0.3) * gain;
       const groundLux = (on ? sk.sunLux * gain * Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation))) : 0) + skyLux;
       const skyCol = lightColor(sk.skyK, 'none');
+      // three converte lo sfondo equirettangolare in una cubemap e la tiene in cache per texture
+      // (senza guardare la versione): liberarla fa ricostruire lo sfondo col cielo nuovo
+      if (this.skyTex) this.skyTex.dispose();
       this.skyTex = skyTexture(skyLux / Math.PI, skyCol, (0.18 * groundLux) / Math.PI, this.skyTex || undefined);
       this.scene.background = this.skyTex;
       this.scene.backgroundIntensity = 1;
+      if (this.outdoor) {
+        // cielo dell'anteprima: emisfero col colore del cielo sopra e la luce del terreno sotto
+        // (in alto: 0,8 × cielo, come la mappa dello scatto, ridotto da quanto cielo coprono i palazzi)
+        const up = Math.max(0, Math.sin(THREE.MathUtils.degToRad(elevation)));
+        const top = 0.8 * skyLux * this.skyView;
+        const bottom = this.outdoor.groundRho * ((on ? this.sun.intensity * up * 0.85 : 0) + top);
+        this.hemi.visible = true;
+        this.hemi.intensity = 1;
+        this.hemi.color.copy(skyCol).multiplyScalar(top);
+        this.hemi.groundColor.setRGB(1, 0.92, 0.8).multiplyScalar(bottom);
+        this.outdoor.setNight(this.nightFactor(s));
+        if (this.outdoor.water) {
+          // riflessi del cielo sul mare in anteprima (nello scatto li calcola il path tracing)
+          this.waterEnv?.dispose();
+          this.waterEnv = skyTexture(skyLux / Math.PI, skyCol, (0.18 * groundLux) / Math.PI);
+          this.outdoor.water.envMap = this.waterEnv;
+          this.outdoor.water.needsUpdate = true;
+        }
+      } else this.hemi.visible = false;
     } else if (this.scene.background === this.skyTex) {
       this.scene.background = new THREE.Color(0x050506);
     }
@@ -1051,7 +1179,7 @@ export class Engine {
   figureWait = new Set<string>();
 
   groundAt(x: number, z: number) {
-    if (this.built) return 0;
+    if (this.built) return groundHeight(this.built, x, z);
     // quota del pavimento letto attorno ai piedi (mediana su una piccola griglia)
     const ys: number[] = [];
     const rc = new THREE.Raycaster();
@@ -1141,6 +1269,8 @@ export class Engine {
   // luce indiretta stimata (sfera integratrice) per l'anteprima
   updateIndirect() {
     if ((!this.recon && !this.built) || !this.snapshot) return;
+    // esterni: niente stanza che rimbalza la luce; il cielo e il terreno li dà l'emisfero
+    if (this.outdoor) { this.ambient.intensity = 0; return; }
     const s = this.snapshot;
     const skyLux = s.sun.enabled ? sunSky(s.sun).skyLux : 0;
     let flux = 0;
@@ -1272,8 +1402,13 @@ export class Engine {
     this.dirty = true;
     // con una persona in quadro si espone per il volto (cartoncino grigio dal lato della chiave)
     const face = this.built ? this.faceLux() : 0;
-    if (face > 0.5) return this.settingsFor(1.3 * Math.PI / face);
-    return this.settingsFor(0.2 / M);
+    // esterni di notte: si espone per una notte (volto 1,5 stop sotto il grigio medio, il buio resta buio)
+    // (senza volto in quadro: 2,5 stop sotto la media, che di notte è fatta di lampioni e vetrine)
+    const night = this.outdoor ? this.nightFactor(this.snapshot.sun) : 0;
+    const eMean = Math.pow(2, -2.5 * night) * 0.2 / M;
+    // di notte il volto non deve far bruciare lampioni e vetrine: mai più chiaro della media
+    if (face > 0.5) return this.settingsFor(night > 0.5 ? Math.min(eMean, Math.pow(2, -1.5 * night) * 1.3 * Math.PI / face) : Math.pow(2, -1.5 * night) * 1.3 * Math.PI / face);
+    return this.settingsFor(eMean);
   }
 
   settingsFor(e: number) {
@@ -1296,6 +1431,12 @@ export class Engine {
     this.yaw = e.y; this.pitch = e.x; this.homeRoll = e.z;
     this.applyLook();
     this.dirty = true;
+  }
+
+  // vista iniziale scelta dal modello di partenza
+  setHome(pos: THREE.Vector3, target: THREE.Vector3) {
+    const d = target.clone().sub(pos);
+    this.homePose = { pos: pos.clone(), quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.atan2(d.y, Math.hypot(d.x, d.z)), Math.atan2(-d.x, -d.z), 0, 'YXZ')), fov: 50 };
   }
 
   // guarda verso un punto da una posizione (vista dalla luce, viste rapide)
@@ -1381,6 +1522,15 @@ export class Engine {
     if (!this.recon && !this.built) return;
     const { min, max } = this.bounds;
     const p = this.camera.position;
+    if (this.built?.outdoor) {
+      // esterni: liberi sul set e ben oltre, mai sotto il terreno (né sott'acqua), in città tra le facciate
+      const r = this.built, m = 60;
+      p.x = Math.min(max[0] + m, Math.max(min[0] - m, p.x));
+      p.z = Math.min(max[2] + m, Math.max(min[2] - m, p.z));
+      if (r.outdoor === 'citta') p.x = Math.min(CITY.facade - 0.25, Math.max(-CITY.facade + 0.25, p.x));
+      p.y = Math.min(60, Math.max(terrainHeight(r, p.x, p.z) + 0.12, p.y));
+      return;
+    }
     if (this.built) {
       // stanza costruita: si può uscire dalla stanza (le pareti davanti alla camera spariscono)
       const m = 9;
@@ -1398,7 +1548,7 @@ export class Engine {
   // non si vedono e non si toccano, ma continuano a fare ombra
   cutaway = new Set<string>();
   updateCutaway(on: boolean) {
-    if (!this.built) return;
+    if (!this.built || this.built.outdoor) return;
     const r = this.built;
     const p = this.camera.position;
     const cut = new Set<string>();
@@ -1693,7 +1843,7 @@ export class Engine {
     const rc = new THREE.Raycaster();
     (rc as any).firstHitOnly = true;
     let lux = 0;
-    for (const L of this.resolveLights(s.lights)) {
+    for (const L of [...this.resolveLights(s.lights), ...this.sceneryLights]) {
       const e = illuminanceAt(L, p, hit.normal, skyLux);
       if (e <= 0) continue;
       const lp = new THREE.Vector3(...L.position);
@@ -1715,6 +1865,7 @@ export class Engine {
       }
     }
     lux += this.ambient.intensity;
+    if (this.outdoor) lux += this.skyIrradiance(p, hit.normal, s.sun);
     const c = s.cam;
     const fs = fStopForLux(lux, c.shutter, c.iso);
     return { lux, fStop: fs, point: hit.point, stops: Math.log2(fs / c.fStop) * 2 };
@@ -1921,7 +2072,7 @@ export class Engine {
   // stanza costruita: tutta la scena in path tracing (luci, lampade, sole e cielo dalle finestre)
   async shootBuilt(onProgress: (p: number) => void, samples: number): Promise<HTMLCanvasElement | null> {
     const s = this.snapshot!;
-    const list = s.lights.filter((L) => L.on && L.origin !== 'finestra' && effectiveLumens(L, 0) > 0);
+    const list = [...s.lights.filter((L) => L.on && L.origin !== 'finestra' && effectiveLumens(L, 0) > 0), ...this.sceneryLights];
     const ptLights = this.buildPtLights(list);
     if (this.sun.visible && this.sun.intensity > 0) {
       const d = new THREE.DirectionalLight(this.sun.color.clone(), this.sun.intensity);
@@ -1973,7 +2124,15 @@ export class Engine {
     const prevBg = this.scene.background;
     this.scene.environment = this.skyTex;
     this.scene.environmentIntensity = 1;
+    // il riflesso del cielo sul mare dell'anteprima non va nel path tracing (lì il cielo è la mappa
+    // d'ambiente; la texture in più confondeva le texture degli altri materiali: rocce bianche, mare abbagliante)
+    // la mappa del cielo è sempre lo stesso oggetto, aggiornato con l'ora: il path tracer va
+    // obbligato a rileggerla (altrimenti di notte usava ancora il cielo di giorno dello scatto prima)
+    (this.pt as any)._previousEnvironment = null;
+    const water = this.outdoor?.water || null, waterEnv = water?.envMap || null;
+    if (water) { water.envMap = null; water.needsUpdate = true; }
     this.shotRestore = () => {
+      if (water) { water.envMap = waterEnv; water.needsUpdate = true; }
       for (const m of hidden) m.visible = true;
       for (const q of matte) {
         (Array.isArray(q.m.material) ? q.m.material : [q.m.material]).forEach((x: any) => x.dispose());
@@ -2187,7 +2346,7 @@ export class Engine {
       this.renderer.setClearColor(new THREE.Color(0.5, 0.5, 1), 1);
       this.renderer.setRenderTarget(nrm); this.renderer.render(this.scene, this.camera);
       this.scene.overrideMaterial = this.distMat;
-      this.renderer.setClearColor(new THREE.Color(1000, 0, 0), 1);
+      this.renderer.setClearColor(new THREE.Color(1e7, 0, 0), 1);
       this.renderer.setRenderTarget(dist); this.renderer.render(this.scene, this.camera);
       nm.dispose();
       restoreMattes();
