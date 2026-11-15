@@ -152,8 +152,37 @@ export function orientSunFor(room: RoomSpec, hour = 10.5) {
 
 // ---------------- vincoli degli arredi ----------------
 export function clampFurniture(f: FurnitureState, room: RoomSpec, all: FurnitureState[]): FurnitureState {
-  const { hx, hz } = footprint(f);
   const b = roomBounds(room);
+  const kw = furnitureKind(f.kind);
+  if (kw.wall != null) {
+    // quadri e specchi: contro la parete più vicina, rivolti verso la stanza
+    const [px, , pz] = f.position;
+    const d = [pz - b.min[2], b.max[2] - pz, px - b.min[0], b.max[0] - px];
+    const i = d.indexOf(Math.min(...d));
+    const half = kw.size[0] / 2, t = kw.size[1] / 2 + 0.004;
+    const along = (v: number, lo: number, hi: number) => (hi - lo < kw.size[0] ? (lo + hi) / 2 : Math.min(hi - half - 0.02, Math.max(lo + half + 0.02, v)));
+    const y = Math.max(0.05, Math.min(room.height - kw.height - 0.02, f.position[1] > 0 ? f.position[1] : kw.wall));
+    // mai sopra finestre e porte: si sposta di lato, verso il bordo libero più vicino
+    const wall = (['fondo', 'davanti', 'sinistra', 'destra'] as const)[i];
+    const sg = i === 0 || i === 3 ? 1 : -1;
+    const lo = i < 2 ? b.min[0] : b.min[2], hi = i < 2 ? b.max[0] : b.max[2];
+    let a = along(i < 2 ? px : pz, lo, hi);
+    const holes = room.openings.filter((o) => o.wall === wall && y < o.sill + o.height && y + kw.height > o.sill);
+    for (let n = 0; n < 4; n++) {
+      const o = holes.find((o) => Math.abs(sg * a - o.offset) < o.width / 2 + half + 0.05);
+      if (!o) break;
+      const l = (o.offset - o.width / 2 - half - 0.06) * sg, r = (o.offset + o.width / 2 + half + 0.06) * sg;
+      const ok = (v: number) => v >= lo + half && v <= hi - half;
+      const c = [l, r].filter(ok).sort((p, q) => Math.abs(p - a) - Math.abs(q - a));
+      if (!c.length) break;
+      a = c[0];
+    }
+    if (i === 0) return { ...f, position: [a, y, b.min[2] + t], rotationY: 0 };
+    if (i === 1) return { ...f, position: [a, y, b.max[2] - t], rotationY: 180 };
+    if (i === 2) return { ...f, position: [b.min[0] + t, y, a], rotationY: 90 };
+    return { ...f, position: [b.max[0] - t, y, a], rotationY: -90 };
+  }
+  const { hx, hz } = footprint(f);
   const x = Math.min(b.max[0] - hx - 0.01, Math.max(b.min[0] + hx + 0.01, f.position[0]));
   const z = Math.min(b.max[2] - hz - 0.01, Math.max(b.min[2] + hz + 0.01, f.position[2]));
   const k = furnitureKind(f.kind);
@@ -291,7 +320,11 @@ export function addFurniture(kind: string) {
     pos = e.camera.position.clone().setY(0).addScaledVector(fwd, d + Math.max(k.size[0], k.size[1]) * 0.25);
     rot = Math.round(THREE.MathUtils.radToDeg(Math.atan2(-fwd.x, -fwd.z)) / 15) * 15;
   }
-  let f: FurnitureState = { id: newId('m'), kind, position: [pos.x, 0, pos.z], rotationY: rot, color: k.finishes[0] };
+  if (k.wall != null && e) {
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion).setY(0).normalize();
+    pos = e.camera.position.clone().setY(0).addScaledVector(fwd, 30);
+  }
+  let f: FurnitureState = { id: newId('m'), kind, position: [pos.x, 0, pos.z], rotationY: rot, color: k.finishes[0] || '' };
   if (k.onTop) {
     // una lampada da tavolo va sul mobile più vicino con un piano
     const host = s.furniture.filter((o) => furnitureKind(o.kind).surface && !furnitureKind(o.kind).onTop && furnitureKind(o.kind).surface! > 0.35)
@@ -300,7 +333,7 @@ export function addFurniture(kind: string) {
   }
   const all = [...s.furniture, f];
   f = clampFurniture(f, s.room, all);
-  if (!k.onTop && !k.ceiling && kind !== 'tappeto') f = freeSpot(f, s.room, s.furniture);
+  if (!k.onTop && !k.ceiling && !k.flat && k.wall == null) f = freeSpot(f, s.room, s.furniture);
   const furniture = [...s.furniture, f];
   const lights = syncRoomLights(s.room, furniture, s.lights);
   useStore.setState({ furniture, lights, selection: { type: 'furniture', id: f.id } });
@@ -339,7 +372,7 @@ function overlaps(a: FurnitureState, b: FurnitureState) {
   return Math.abs(a.position[0] - b.position[0]) < fa.hx + fb.hx + 0.05 && Math.abs(a.position[2] - b.position[2]) < fa.hz + fb.hz + 0.05;
 }
 function freeSpot(f: FurnitureState, room: RoomSpec, others: FurnitureState[]) {
-  const solid = others.filter((o) => { const k = furnitureKind(o.kind); return !k.onTop && !k.ceiling && o.kind !== 'tappeto'; });
+  const solid = others.filter((o) => { const k = furnitureKind(o.kind); return !k.onTop && !k.ceiling && !k.flat && k.wall == null; });
   if (!solid.some((o) => overlaps(f, o))) return f;
   for (let r = 0.25; r < 6; r += 0.25) {
     for (let a = 0; a < 16; a++) {

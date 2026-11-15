@@ -215,6 +215,7 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 /* telefono: schede e pannelli come foglio in basso, la scena resta visibile sopra */
 .pop.sheet{max-height:min(34vh,270px);padding-top:0;animation:sheetup .22s var(--ease);transition:max-height .22s var(--ease)}
 .pop.sheet.full{max-height:calc(100vh - 110px)}
+.pop.sheet:not(.full):not(.mini):has(.catalog){max-height:min(56vh,470px)}
 .pop.sheet .hint:not(.num){display:none}
 .pop.sheet.full .hint{display:block}
 .pop.sheet .grab .x{position:absolute;right:4px;top:0;width:40px;height:32px;border:0;background:none;color:var(--t2);font-size:22px;line-height:28px;cursor:pointer}
@@ -296,3 +297,14 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
   #creator .cr-acts .btn{padding:8px 10px}
   #creator .cr-hint{display:none}
 }
+
+/* catalogo degli arredi */
+.cats{display:flex;gap:6px;overflow-x:auto;margin:0 -16px 10px;padding:0 16px 2px;scrollbar-width:none}
+.cats::-webkit-scrollbar{display:none}
+.cats .chip{flex:none}
+.catalog{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-height:min(46vh,380px);overflow-y:auto;margin:0 -6px;padding:0 6px}
+.catalog .item{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 4px 8px;border-radius:10px;color:var(--t2);font-size:10.5px;line-height:1.25;text-align:center;background:rgba(255,255,255,.035)}
+.catalog .item:hover{background:rgba(255,255,255,.08);color:var(--t1)}
+.catalog .item img,.catalog .item .ic{width:72px;height:72px;object-fit:contain;display:flex;align-items:center;justify-content:center}
+.catalog .item .ic svg{width:30px;height:30px;stroke:currentColor;fill:none;stroke-width:1.3}
+.pop.sheet .catalog{max-height:none}

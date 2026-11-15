@@ -11,7 +11,7 @@ import Creator from './ui/Creator';
 import { loadPhotos, saveProject, openProject, loadSample, snapshotOf } from './project';
 import { addLightAtScreen, addLight, removeSelection, clampToRoom } from './actions';
 import { Start, RoomPanel, FurnitureCard, OpeningCard } from './ui/Room';
-import { moveFurniture, updateOpening, autoExpose } from './build';
+import { moveFurniture, updateOpening, autoExpose, addFurniture } from './build';
 import { wallFrame } from './engine/room';
 import { fmtHour, WEATHER } from './engine/sun';
 import { fmtStop } from './engine/photometry';
@@ -49,7 +49,7 @@ export default function App() {
     ref.engine = e;
     (window as any).__engine = e;
     (window as any).__store = useStore;
-    (window as any).__actions = { addLight, poseJoints, closeAll: () => { const r = useStore.getState().room; r?.openings.forEach((o) => { if (o.kind !== 'porta') updateOpening(o.id, { closed: true }); }); } };
+    (window as any).__actions = { addLight, poseJoints, addFurniture, moveFurniture, closeAll: () => { const r = useStore.getState().room; r?.openings.forEach((o) => { if (o.kind !== 'porta') updateOpening(o.id, { closed: true }); }); } };
     const unsub = useStore.subscribe((s, p) => {
       if (s.lights !== p.lights || s.people !== p.people || s.props !== p.props || s.sun !== p.sun || s.cam !== p.cam || s.ambient !== p.ambient || s.room !== p.room || s.furniture !== p.furniture) e.apply(snapshotOf());
       if (s.selection !== p.selection || s.furniture !== p.furniture) e.setSelected(s.selection?.type === 'furniture' || s.selection?.type === 'opening' ? s.selection.id : null);

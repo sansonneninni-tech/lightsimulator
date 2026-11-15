@@ -2,7 +2,10 @@
 // Il fronte di ogni mobile guarda verso +Z locale; l'origine è a terra al centro dell'ingombro.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { woodMap, worldUV } from './room';
+import { CATALOG } from './catalog';
 
 export interface FurnitureState {
   id: string;
@@ -23,6 +26,12 @@ export interface FurnitureKind {
   ceiling?: boolean;      // appeso al soffitto
   surface?: number;       // altezza del piano d'appoggio
   icon: string;
+  cat?: string;           // categoria nel catalogo
+  model?: string;         // modello 3D in public/catalog (altrimenti forma parametrica)
+  scale?: number;         // scala del modello
+  wall?: number;          // appeso alla parete: altezza da terra del bordo basso
+  flat?: boolean;         // a terra e calpestabile (tappeti): non ingombra
+  rug?: 'persiano' | 'kilim' | 'berbero' | 'righe' | 'tondo' | 'passatoia';
 }
 
 export const FINISHES: Record<string, { name: string; color: string; kind: 'tessuto' | 'legno' | 'laccato' | 'metallo' | 'pelle' }> = {
@@ -64,7 +73,30 @@ export const FURNITURE: FurnitureKind[] = [
   { id: 'lampadario', name: 'Lampadario', size: [0.5, 0.5], height: 0.8, finishes: LAMP, ceiling: true, light: { offset: [0, -0.62, 0], fixture: 'bulb-150', kelvin: 2700, name: 'Lampadario' }, icon: '<path d="M12 2v8M6 16a6 6 0 0 1 12 0zM10 19h4"/>' },
 ];
 
-export const furnitureKind = (id: string) => FURNITURE.find((f) => f.id === id) || FURNITURE[0];
+const RUG_ICON = '<rect x="3" y="7" width="18" height="10" rx="1"/><path d="M6 10h12M6 14h12"/>';
+FURNITURE.push(
+  { id: 'tappeto-persiano', name: 'Tappeto persiano', size: [2.4, 1.7], height: 0.012, finishes: ['ruggine', 'blu', 'verde'], rug: 'persiano', icon: RUG_ICON },
+  { id: 'tappeto-kilim', name: 'Kilim', size: [2.0, 1.4], height: 0.01, finishes: ['ruggine', 'blu', 'sabbia'], rug: 'kilim', icon: RUG_ICON },
+  { id: 'tappeto-berbero', name: 'Tappeto berbero', size: [2.3, 1.6], height: 0.016, finishes: ['sabbia', 'grigio'], rug: 'berbero', icon: RUG_ICON },
+  { id: 'tappeto-righe', name: 'Tappeto a righe', size: [2.0, 1.4], height: 0.01, finishes: ['blu', 'grigio', 'verde', 'ruggine'], rug: 'righe', icon: RUG_ICON },
+  { id: 'tappeto-tondo', name: 'Tappeto tondo', size: [1.8, 1.8], height: 0.012, finishes: ['sabbia', 'grigio', 'blu', 'verde'], rug: 'tondo', icon: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/>' },
+  { id: 'tappeto-passatoia', name: 'Passatoia', size: [0.8, 2.6], height: 0.01, finishes: ['ruggine', 'blu', 'grigio'], rug: 'passatoia', icon: '<rect x="8" y="3" width="8" height="18" rx="1"/>' },
+);
+const BASE_CAT: Record<string, string> = {
+  divano: 'divani', poltrona: 'sedute', sedia: 'sedute', tavolo: 'tavoli', tavolino: 'tavoli', scrivania: 'tavoli', letto: 'letti', comodino: 'letti',
+  libreria: 'contenitori', armadio: 'contenitori', mobiletv: 'contenitori', cucina: 'cucina', pianta: 'piante', lampadaterra: 'luci', lampadatavolo: 'luci', lampadario: 'luci',
+};
+for (const f of FURNITURE) { f.cat = f.id.startsWith('tappeto') ? 'tappeti' : BASE_CAT[f.id]; if (f.id.startsWith('tappeto')) f.flat = true; }
+
+// tutto il catalogo: forme parametriche (con finiture) e modelli 3D
+export const ALL_FURNITURE: FurnitureKind[] = [...FURNITURE, ...CATALOG];
+export const CATEGORIES: { id: string; name: string }[] = [
+  { id: 'sedute', name: 'Sedute' }, { id: 'divani', name: 'Divani' }, { id: 'tavoli', name: 'Tavoli' }, { id: 'letti', name: 'Letti' },
+  { id: 'contenitori', name: 'Armadi e librerie' }, { id: 'luci', name: 'Lampade' }, { id: 'tappeti', name: 'Tappeti' }, { id: 'pareti', name: 'Quadri e specchi' },
+  { id: 'decoro', name: 'Oggetti' }, { id: 'piante', name: 'Piante' }, { id: 'cucina', name: 'Cucina' }, { id: 'bagno', name: 'Bagno' },
+];
+const byId = new Map(ALL_FURNITURE.map((f) => [f.id, f]));
+export const furnitureKind = (id: string) => byId.get(id) || FURNITURE[0];
 
 // ---------------- materiali ----------------
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -124,8 +156,15 @@ export function buildFurniture(f: FurnitureState, ceilingY = 2.8) {
   const k = furnitureKind(f.kind);
   const g = new THREE.Group();
   g.name = 'arredo';
+  if (k.model) return buildModel(g, f, k, ceilingY);
   const fin = finishMaterial(f.color);
   const [W, D] = k.size;
+  if (k.rug) {
+    const geo = k.rug === 'tondo' ? new THREE.CylinderGeometry(W / 2, W / 2, k.height, 64) : new THREE.BoxGeometry(W, k.height, D);
+    const m = add(g, geo, rugMaterial(k.rug, f.color, W, D), [0, k.height / 2, 0]);
+    m.castShadow = false;
+    (geo as any).__uv = 1; // il disegno resta quello della texture
+  }
   switch (k.id) {
     case 'divano': {
       add(g, soft(W, 0.22, D - 0.05, 0.03), fin, [0, 0.2, 0]);
@@ -287,6 +326,156 @@ export function buildFurniture(f: FurnitureState, ceilingY = 2.8) {
   g.updateMatrixWorld(true);
   g.traverse((o: any) => { if (o.isMesh && (o.material as any).map && !(o.geometry as any).__uv) { worldUV(o.geometry, o.matrixWorld, 1.5); (o.geometry as any).__uv = 1; } });
   return g;
+}
+
+// ---------------- modelli 3D ----------------
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const models = new Map<string, Promise<{ scene: THREE.Object3D; box: THREE.Box3 }>>();
+const pending = new Set<Promise<unknown>>();
+let onLoaded: (() => void) | null = null;
+export function onFurnitureLoaded(cb: () => void) { onLoaded = cb; }
+// lo scatto aspetta i modelli ancora in arrivo
+export function furnitureReady() { return Promise.all([...pending]); }
+export function modelUrl(name: string) { return `${import.meta.env.BASE_URL}catalog/${name}.glb`; }
+function loadModel(name: string) {
+  if (!models.has(name)) {
+    models.set(name, loader.loadAsync(modelUrl(name)).then((gl) => {
+      const scene = gl.scene;
+      scene.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(scene);
+      scene.traverse((o: any) => {
+        if (!o.isMesh) return;
+        // i file sono compressi con attributi quantizzati (interi, interlacciati): il path tracer
+        // li leggerebbe male (mobili trasparenti come vetro), quindi si riportano a float semplici
+        const geo = o.geometry as THREE.BufferGeometry;
+        for (const k of Object.keys(geo.attributes)) {
+          const a: any = geo.attributes[k];
+          if (a.array instanceof Float32Array && !a.isInterleavedBufferAttribute) continue;
+          const n = a.count, s = a.itemSize, f = new Float32Array(n * s);
+          for (let i = 0; i < n; i++) for (let j = 0; j < s; j++) f[i * s + j] = a.getComponent(i, j);
+          geo.setAttribute(k, new THREE.BufferAttribute(f, s));
+        }
+        if (geo.attributes.normal) geo.normalizeNormals();
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of ms) {
+          // vetri dei modelli: trasparenti anche nello scatto
+          if (m.transparent && m.opacity < 1) m.depthWrite = false;
+          if (m.map) m.map.anisotropy = 4;
+        }
+      });
+      return { scene, box };
+    }));
+  }
+  return models.get(name)!;
+}
+
+function buildModel(g: THREE.Group, f: FurnitureState, k: FurnitureKind, ceilingY: number) {
+  // segnaposto finché il modello arriva: un ingombro invisibile ma selezionabile
+  const ph = new THREE.Mesh(new THREE.BoxGeometry(k.size[0], k.height, k.size[1]), new THREE.MeshBasicMaterial({ visible: false }));
+  ph.position.y = k.ceiling ? ceilingY - k.height / 2 : k.height / 2;
+  ph.userData.furnitureId = f.id;
+  ph.userData.placeholder = true;
+  g.add(ph);
+  const p = loadModel(k.model!).then(({ scene, box }) => {
+    const s = k.scale || 1;
+    const c = scene.clone(true);
+    c.scale.setScalar(s);
+    // base a terra (o in alto al soffitto), centro dell'ingombro sull'origine; il fronte guarda +Z
+    const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+    c.position.set(-cx * s, k.ceiling ? ceilingY - box.max.y * s : -box.min.y * s, -cz * s);
+    const lit = !!k.light;
+    c.traverse((o: any) => {
+      if (!o.isMesh) return;
+      o.userData.furnitureId = f.id;
+      // le lampade non fanno ombra alla propria luce
+      o.castShadow = !lit; o.receiveShadow = true;
+      // e nemmeno nello scatto finale (lì conta il materiale): paralumi e vetri non spengono la lampadina
+      if (lit) for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.castShadow = false;
+      if (!(o.geometry as any).boundsTree) (o.geometry as any).computeBoundsTree?.();
+    });
+    g.remove(ph);
+    g.add(c);
+    if (lit) bulb(g, [k.light!.offset[0], (k.ceiling ? ceilingY : 0) + k.light!.offset[1], k.light!.offset[2]], 0.02);
+    g.updateMatrixWorld(true);
+    onLoaded?.();
+  }).catch((e) => console.warn('modello', k.model, e)).finally(() => pending.delete(p));
+  pending.add(p);
+  return g;
+}
+
+// ---------------- tappeti ----------------
+const rugCache = new Map<string, THREE.MeshStandardMaterial>();
+function rugMaterial(style: string, finish: string, W: number, D: number) {
+  const key = `${style}|${finish}`;
+  const hit = rugCache.get(key);
+  if (hit) return hit;
+  const base = new THREE.Color(FINISHES[finish]?.color || '#9a5136');
+  const hsl = { h: 0, s: 0, l: 0 }; base.getHSL(hsl);
+  const col = (dl: number, ds = 0, dh = 0) => new THREE.Color().setHSL((hsl.h + dh + 1) % 1, Math.min(1, Math.max(0, hsl.s + ds)), Math.min(0.95, Math.max(0.04, hsl.l + dl))).getStyle();
+  const cream = '#e6dcc8', ink = '#2b2420';
+  const w = 1024, h = Math.max(64, Math.round((1024 * D) / W));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const x = cv.getContext('2d')!;
+  const rnd = mulberry(style.length * 7 + finish.length);
+  if (style === 'persiano') {
+    x.fillStyle = col(-0.05); x.fillRect(0, 0, w, h);
+    const bw = h * 0.12;
+    x.fillStyle = col(-0.2, 0, 0.55); x.fillRect(bw * 0.3, bw * 0.3, w - bw * 0.6, h - bw * 0.6);
+    x.fillStyle = col(-0.02); x.fillRect(bw, bw, w - bw * 2, h - bw * 2);
+    x.strokeStyle = cream; x.lineWidth = 4; x.strokeRect(bw * 0.65, bw * 0.65, w - bw * 1.3, h - bw * 1.3);
+    // medaglione centrale e ornamenti
+    const cx = w / 2, cy = h / 2;
+    for (let i = 5; i > 0; i--) {
+      x.fillStyle = i % 2 ? col(-0.22, 0, 0.55) : cream;
+      x.beginPath(); x.ellipse(cx, cy, (w * 0.09 * i) / 2.4, (h * 0.09 * i) / 2.4, 0, 0, Math.PI * 2); x.fill();
+    }
+    for (let i = 0; i < 260; i++) {
+      const px = bw + rnd() * (w - bw * 2), py = bw + rnd() * (h - bw * 2);
+      x.fillStyle = [cream, col(-0.25, 0, 0.55), col(0.12), ink][i % 4];
+      x.beginPath(); x.arc(px, py, 3 + rnd() * 6, 0, Math.PI * 2); x.fill();
+    }
+    for (const [sx, sy] of [[bw * 1.6, bw * 1.6], [w - bw * 1.6, bw * 1.6], [bw * 1.6, h - bw * 1.6], [w - bw * 1.6, h - bw * 1.6]]) {
+      x.fillStyle = col(-0.22, 0, 0.55); x.beginPath(); x.ellipse(sx, sy, w * 0.07, h * 0.1, 0, 0, Math.PI * 2); x.fill();
+    }
+  } else if (style === 'kilim') {
+    x.fillStyle = col(0); x.fillRect(0, 0, w, h);
+    const n = 6, cw = w / n;
+    for (let r = 0; r < 3; r++) for (let i = 0; i < n; i++) {
+      const cx = cw * (i + 0.5), cy = (h / 3) * (r + 0.5), a = cw * 0.42, b = (h / 3) * 0.42;
+      x.fillStyle = (i + r) % 2 ? cream : ink;
+      x.beginPath(); x.moveTo(cx, cy - b); x.lineTo(cx + a, cy); x.lineTo(cx, cy + b); x.lineTo(cx - a, cy); x.closePath(); x.fill();
+      x.fillStyle = col(0.08, 0, 0.08);
+      x.beginPath(); x.moveTo(cx, cy - b * 0.5); x.lineTo(cx + a * 0.5, cy); x.lineTo(cx, cy + b * 0.5); x.lineTo(cx - a * 0.5, cy); x.closePath(); x.fill();
+    }
+    x.fillStyle = ink; x.fillRect(0, 0, w, h * 0.04); x.fillRect(0, h * 0.96, w, h * 0.04);
+  } else if (style === 'berbero') {
+    x.fillStyle = col(0.18, -0.15); x.fillRect(0, 0, w, h);
+    x.strokeStyle = ink; x.lineWidth = 6;
+    const n = 5;
+    for (let i = -n; i <= n * 2; i++) {
+      x.beginPath(); x.moveTo((i * w) / n, 0); x.lineTo(((i + 1.5) * w) / n, h); x.stroke();
+      x.beginPath(); x.moveTo((i * w) / n, 0); x.lineTo(((i - 1.5) * w) / n, h); x.stroke();
+    }
+  } else if (style === 'righe' || style === 'passatoia') {
+    const horiz = style === 'righe';
+    const L = horiz ? w : h, n = horiz ? 14 : 10;
+    for (let i = 0; i < n; i++) {
+      x.fillStyle = [col(0), cream, col(-0.15), cream, col(0.1)][i % 5];
+      if (horiz) x.fillRect((i * L) / n, 0, L / n + 1, h); else x.fillRect(0, (i * L) / n, w, L / n + 1);
+    }
+  } else if (style === 'tondo') {
+    x.fillStyle = col(0); x.fillRect(0, 0, w, h);
+    for (let i = 7; i > 0; i--) { x.fillStyle = i % 2 ? col(0.06 * (i % 3)) : cream; x.beginPath(); x.arc(w / 2, h / 2, (w / 2) * (i / 7) * 0.98, 0, Math.PI * 2); x.fill(); }
+  }
+  // trama del tessuto
+  const img = x.getImageData(0, 0, w, h), d = img.data;
+  for (let i = 0; i < d.length; i += 4) { const n = (rnd() - 0.5) * 22; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+  x.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  const m = new THREE.MeshStandardMaterial({ map: t, roughness: 1 });
+  rugCache.set(key, m);
+  return m;
 }
 
 function shade(g: THREE.Group, rTop: number, rBot: number, h: number, y: number) {

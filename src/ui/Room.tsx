@@ -6,7 +6,7 @@ import Pop from './Pop';
 import { Svg, Del } from './icons';
 import { edgePoint } from './Handles';
 import { TEMPLATES, Template, createRoom, updateRoom, addOpening, updateOpening, addFurniture, moveFurniture, duplicateFurniture, removeFurniture, removeOpening } from '../build';
-import { FURNITURE, FINISHES, furnitureKind } from '../engine/furniture';
+import { ALL_FURNITURE, CATEGORIES, FINISHES, furnitureKind } from '../engine/furniture';
 import { WALL_FINISHES, FLOORS, OPENING_KINDS, WALLS, RoomSpec } from '../engine/room';
 import { stopsLabel } from '../export/exports';
 
@@ -25,7 +25,7 @@ function planIcon(t: Template) {
   let out = `<rect x="${x0}" y="${y0}" width="${w}" height="${d}" rx="1"/>`;
   for (const [kind, x, z, rot] of t.furniture) {
     const k = furnitureKind(kind);
-    if (k.ceiling || k.onTop || kind === 'tappeto') continue;
+    if (k.ceiling || k.onTop || k.flat || k.wall != null) continue;
     const cx = x0 + (x + W / 2) * s, cy = y0 + (z + D / 2) * s;
     out += `<rect x="${cx - (k.size[0] * s) / 2}" y="${cy - (k.size[1] * s) / 2}" width="${k.size[0] * s}" height="${k.size[1] * s}" rx=".6" transform="rotate(${-rot} ${cx} ${cy})" fill="currentColor" fill-opacity=".25" stroke-width=".8"/>`;
   }
@@ -72,9 +72,12 @@ function Slider({ label, value, min, max, step = 0.05, onChange }: { label: stri
   );
 }
 
+let lastCat = 'sedute';
+
 export function RoomPanel({ onClose }: { onClose: () => void }) {
   const room = useStore((s) => s.room);
   const [tab, setTab] = useState<'arredi' | 'stanza'>('arredi');
+  const [cat, setCat] = useState(lastCat);
   const a = dockAnchor();
   if (!room) return null;
   const up = (p: Partial<RoomSpec>) => updateRoom(p, false);
@@ -86,10 +89,18 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
       </div>
       {tab === 'arredi' ? (
         <>
-          <div className="types five">
-            {FURNITURE.map((k) => <button key={k.id} className="type" onClick={() => { addFurniture(k.id); onClose(); }}><Svg d={k.icon} />{k.name}</button>)}
+          <div className="cats">
+            {CATEGORIES.map((c) => <button key={c.id} className={`chip ${cat === c.id ? 'on' : ''}`} onClick={() => { lastCat = c.id; setCat(c.id); }}>{c.name}</button>)}
           </div>
-          <div className="hint">Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi. Le lampade fanno luce vera.</div>
+          <div className="catalog">
+            {ALL_FURNITURE.filter((k) => k.cat === cat).map((k) => (
+              <button key={k.id} className="item" onClick={() => { addFurniture(k.id); onClose(); }}>
+                {k.model ? <img src={`${import.meta.env.BASE_URL}catalog/th/${k.model}.webp`} alt="" loading="lazy" draggable={false} /> : <span className="ic"><Svg d={k.icon} /></span>}
+                <span>{k.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="hint">{cat === 'pareti' ? 'Va sulla parete che stai guardando. Trascinalo per spostarlo lungo le pareti.' : cat === 'luci' ? 'Le lampade fanno luce vera: regolala nel pannello Luci.' : cat === 'decoro' ? 'Si appoggia sul mobile più vicino, se c\'è.' : 'Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi.'}</div>
         </>
       ) : (
         <>
@@ -146,7 +157,7 @@ export function FurnitureCard({ id }: { id: string }) {
   return (
     <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
       <h3><span>{k.name}</span><div className="acts">{light && <div className={`toggle ${light.on ? 'on' : ''}`} title="Accesa" onClick={() => { st().snapshot(); st().updateLight(light.id, { on: !light.on }); }} />}<Del onClick={() => removeFurniture(id)} /></div></h3>
-      <div className="row">
+      {k.finishes.length > 0 && <div className="row">
         <div className="k"><span>Finitura</span></div>
         <div className="chips">
           {k.finishes.map((c) => (
@@ -155,22 +166,23 @@ export function FurnitureCard({ id }: { id: string }) {
             </button>
           ))}
         </div>
-      </div>
-      <div className="row">
+      </div>}
+      {k.wall != null && <Slider label="Altezza da terra" value={f.position[1]} min={0.1} max={2.6} onChange={(v) => moveFurniture(id, { position: [f.position[0], v, f.position[2]] })} />}
+      {k.wall == null && <div className="row">
         <div className="k"><span>Rotazione</span><b className="num">{Math.round(f.rotationY)}°</b></div>
         <div className="rotrow">
           <button className="btn" onClick={() => rot(90)} title="Gira a sinistra">↺ 90°</button>
           <input type="range" min={0} max={359} step={5} value={((f.rotationY % 360) + 360) % 360} onPointerDown={() => st().snapshot()} onChange={(e) => moveFurniture(id, { rotationY: +e.target.value })} />
           <button className="btn" onClick={() => rot(-90)} title="Gira a destra">↻ 90°</button>
         </div>
-      </div>
+      </div>}
       {light && (
         <div className="row">
           <div className="k"><span>Luce</span><b className="num">{light.on ? `${stopsLabel(light.stops)} · ${light.kelvin} K` : 'spenta'}</b></div>
           <button className="btn" onClick={() => useStore.setState({ selection: { type: 'light', id: light.id } })}>Regola la luce</button>
         </div>
       )}
-      <div className="hint">Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.</div>
+      <div className="hint">{k.wall != null ? 'Trascinalo per spostarlo lungo le pareti.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
       <div className="hr" />
       <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
     </Pop>

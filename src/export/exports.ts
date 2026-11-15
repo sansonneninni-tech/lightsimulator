@@ -89,7 +89,7 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
     if (k.ceiling) continue;
     const cx = X(f.position[0]), cy = Z(f.position[2]);
     const w = k.size[0] * s, d = k.size[1] * s;
-    const rug = f.kind === 'tappeto';
+    const rug = !!k.flat;
     out += `<rect x="${cx - w / 2}" y="${cy - d / 2}" width="${w}" height="${d}" rx="3" transform="rotate(${-f.rotationY} ${cx} ${cy})" fill="${rug ? 'none' : '#f3f3f1'}" stroke="${rug ? '#ddd' : '#bbb'}" stroke-dasharray="${rug ? '4 3' : ''}"/>`;
     if (!rug && !k.onTop && Math.min(w, d) > 22) out += `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="10" fill="#999">${esc(k.name)}</text>`;
   }

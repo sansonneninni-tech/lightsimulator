@@ -13,7 +13,7 @@ import { PersonState, buildMannequin, applyPose } from './mannequin';
 import { SunState, sunDirection, sunSky } from './sun';
 import type { PropState, CamState, SceneSnapshot } from '../store';
 import { RoomSpec, WallId, wallFrame, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
-import { FurnitureState, buildFurniture } from './furniture';
+import { FurnitureState, buildFurniture, furnitureReady, onFurnitureLoaded } from './furniture';
 import { denoise } from './denoise';
 import { Rigs } from './rigs';
 import { loadFigure, poseFigure, figureModel } from './figure';
@@ -222,6 +222,8 @@ export class Engine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
     container.appendChild(this.renderer.domElement);
+    // un arredo a modello 3D è arrivato: riquadro, bagliori e immagine da aggiornare
+    onFurnitureLoaded(() => { this.updateSelBox(); this.updateGlow(); this.dirty = true; });
     this.renderer.domElement.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none';
     this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4, colorSpace: THREE.LinearSRGBColorSpace });
     this.quadMat = new THREE.ShaderMaterial({
@@ -1813,7 +1815,7 @@ export class Engine {
   async shoot(onProgress: (p: number) => void, samples = 384): Promise<HTMLCanvasElement | null> {
     if (this.shot || !this.snapshot) return null;
     this.setViewShift(0);
-    if (this.built) return this.shootBuilt(onProgress, 600);
+    if (this.built) { await furnitureReady(); return this.shootBuilt(onProgress, 600); }
     const s = this.snapshot;
     const added = s.lights.filter((L) => L.on && L.origin === 'aggiunta' && effectiveLumens(L, 0) > 0);
     if (!added.length) {
