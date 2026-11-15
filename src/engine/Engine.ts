@@ -1932,7 +1932,15 @@ export class Engine {
       const fs = ptm.fragmentShader.replace(/if \( material\.matte && state\.firstRay \) \{\s*gl_FragColor = vec4\( 0\.0 \);\s*break;\s*\}/,
         'if ( material.matte && state.firstRay ) { ray.origin = stepRayOrigin( ray.origin, ray.direction, - surfaceHit.faceNormal, surfaceHit.dist ); continue; }');
       if (fs === ptm.fragmentShader) console.warn('matte patch non applicata');
-      ptm.fragmentShader = fs; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
+      // luce diretta: la libreria la cercava partendo dal lato del rimbalzo scelto a caso; quando il
+      // rimbalzo (lucido, ruvido) finisce sotto la superficie, il raggio verso la lampada partiva da
+      // dentro la superficie stessa e risultava in ombra. Superfici opache: circa il 20% di luce
+      // diretta in meno (misurato su un piano bianco: 0,77 invece di 0,97 per lampadine, spot,
+      // pannelli e sole). Il raggio verso la luce parte sempre dal lato da cui si guarda.
+      const fs2 = fs.replace('directLightContribution( - ray.direction, surf, state, hitPoint )',
+        'directLightContribution( - ray.direction, surf, state, isBelowSurface && surf.transmission == 0.0 ? stepRayOrigin( ray.origin, ray.direction, surf.faceNormal, surfaceHit.dist ) : hitPoint )');
+      if (fs2 === fs) console.warn('patch luce diretta non applicata');
+      ptm.fragmentShader = fs2; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
     }
     // leggero per la scheda video: al massimo ~0,9 megapixel calcolati (il resto lo fa il filtro
     // del rumore e l'ingrandimento), a pezzetti piccoli così il computer resta reattivo
