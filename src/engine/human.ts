@@ -15,7 +15,10 @@ export interface Look {
   hairColor: string;
   brows: string;
   eyes: string;
-  outfit: string;   // '' = intimo
+  outfit: string;   // abito completo (vecchi progetti); ora valgono top e bottom
+  top?: string;     // abito da cui si prende la parte di sopra ('' = nudo sopra)
+  bottom?: string;  // abito da cui si prende la parte di sotto ('' = nudo sotto)
+  under?: string;   // intimo: '' nessuno, oppure il colore (nero, bianco, carne)
   outfitHue: number;   // gradi
   outfitLight: number; // -1..1
   shoes: string;
@@ -47,11 +50,11 @@ export function defaultLook(figure: 'uomo' | 'donna' = 'uomo', skin = 'media'): 
   return {
     age: 0.1, muscle: 0.5, weight: 0.5, breast: 0, race, form: '', s: {},
     hair: figure === 'donna' ? 'long01' : 'short02', hairColor: '#3b2a20', brows: figure === 'donna' ? 'eyebrow010' : 'eyebrow001', eyes: 'brown',
-    outfit: figure === 'donna' ? 'female_casualsuit01' : 'male_casualsuit01', outfitHue: 0, outfitLight: 0, shoes: figure === 'donna' ? 'shoes02' : 'shoes01', hat: '', expr: 'neutra', skinLight: 0,
+    outfit: figure === 'donna' ? 'female_casualsuit01' : 'male_casualsuit01', top: figure === 'donna' ? 'female_casualsuit01' : 'male_casualsuit01', bottom: figure === 'donna' ? 'female_casualsuit01' : 'male_casualsuit01', under: '', outfitHue: 0, outfitLight: 0, shoes: figure === 'donna' ? 'shoes02' : 'shoes01', hat: '', expr: 'neutra', skinLight: 0,
   };
 }
 
-type Item = { kind: string; name: string; nv: number; nr: number; ni: number; refs: number; w: number; off: number; vert: number; uv: number; idx: number; scale: Record<string, [number, number, number]>; del?: [number, number][]; map?: string; normal?: string; transparent: boolean };
+type Item = { part?: 'top' | 'bottom'; kind: string; name: string; nv: number; nr: number; ni: number; refs: number; w: number; off: number; vert: number; uv: number; idx: number; scale: Record<string, [number, number, number]>; del?: [number, number][]; map?: string; normal?: string; transparent: boolean };
 type Manifest = {
   nv: number; nr: number; ni: number; pos: number; bodyVert: number; bodyUV: number; bodyIdx: number; skinIdx: number; skinW: number;
   bones: { name: string; parent: number; head: number[]; tail: number[] }[];
@@ -218,6 +221,103 @@ export const HUMAN_MAP: Record<string, string> = {
 };
 
 // costruisce il personaggio a riposo (posa ad A) con scheletro e pelle
+// abiti in un pezzo solo: si scelgono come "sopra" e coprono anche il sotto
+export const UNDER_COLORS: Record<string, string> = { nero: '#161616', bianco: '#e9e6e0', carne: '#c9a58c' };
+export const WHOLE_SUITS = ['male_worksuit01'];
+
+// un oggetto agganciato: posizione di ogni vertice dai tre vertici della pelle (e i loro pesi sulle ossa).
+// Di un abito diviso tiene solo le isole di stoffa sopra o sotto la vita.
+function fitItem(it: Item, b: ArrayBuffer, pos: Float32Array, skinI: Uint8Array, skinW: Uint8Array, waistY: number) {
+  const v3 = new THREE.Vector3();
+  const refs = new Uint16Array(b, it.refs, it.nv * 3), w = new Float32Array(b, it.w, it.nv * 3), off = new Float32Array(b, it.off, it.nv * 3);
+    const sc = (ax: 'x' | 'y' | 'z', k: number) => {
+      const s = it.scale[ax];
+      if (!s) return 1;
+      return Math.abs(pos[s[0] * 3 + k] - pos[s[1] * 3 + k]) / (s[2] * 0.1);
+    };
+    const sx = sc('x', 0) * 0.1, sy = sc('y', 1) * 0.1, sz = sc('z', 2) * 0.1;
+    const pp = new Float32Array(it.nv * 3);
+    const bw: Map<number, number>[] = [];
+    for (let i = 0; i < it.nv; i++) {
+      v3.set(0, 0, 0);
+      const acc = new Map<number, number>();
+      for (let k = 0; k < 3; k++) {
+        const r = refs[i * 3 + k], ww = w[i * 3 + k];
+        v3.x += pos[r * 3] * ww; v3.y += pos[r * 3 + 1] * ww; v3.z += pos[r * 3 + 2] * ww;
+        if (ww > 0) for (let q = 0; q < 4; q++) { const bi = skinI[r * 4 + q], bwv = skinW[r * 4 + q] / 255 * ww; if (bwv > 0) acc.set(bi, (acc.get(bi) || 0) + bwv); }
+      }
+      pp[i * 3] = v3.x + off[i * 3] * sx; pp[i * 3 + 1] = v3.y + off[i * 3 + 1] * sy; pp[i * 3 + 2] = v3.z + off[i * 3 + 2] * sz;
+      bw.push(acc);
+    }
+    // gli abiti stanno un filo sopra la pelle: niente pelle che affiora a colletto e spalle
+    if (it.kind === 'abito') {
+      const nn = smoothNormals(pp, new Uint16Array(b, it.vert, it.nr), new Uint32Array(b, it.idx, it.ni), it.nv, (r) => new Uint16Array(b, it.vert, it.nr)[r]);
+      const vm = new Uint16Array(b, it.vert, it.nr);
+      const done = new Uint8Array(it.nv);
+      for (let r = 0; r < it.nr; r++) { const i = vm[r]; if (done[i]) continue; done[i] = 1; for (let k = 0; k < 3; k++) pp[i * 3 + k] += nn[r * 3 + k] * 0.004; }
+    }
+  const vm = new Uint16Array(b, it.vert, it.nr);
+  let idx = new Uint32Array(b, it.idx, it.ni);
+  if (it.part) {
+    // isole della stoffa (collegate anche nella mappa UV): ognuna va sopra o sotto secondo il suo centro
+    const par = new Int32Array(it.nr).map((_, i) => i);
+    const find = (a: number): number => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+    for (let t = 0; t < idx.length; t += 3) { const a = find(idx[t]); par[find(idx[t + 1])] = a; par[find(idx[t + 2])] = a; }
+    const sum = new Map<number, number[]>();
+    for (let r = 0; r < it.nr; r++) { const k = find(r), e = sum.get(k) || [0, 0, 0, 0]; for (let q = 0; q < 3; q++) e[q] += pp[vm[r] * 3 + q]; e[3]++; sum.set(k, e); }
+    // le isole piccole (bottoni, rivetti, passanti) seguono l'isola grande più vicina, non la propria altezza:
+    // su un corpo diverso il bottone dei jeans può finire sopra la vita e restare sospeso sulla maglia
+    const below = new Map<number, boolean>(), big: [number[], boolean][] = [];
+    for (const [k, e] of sum) { const c = [e[0] / e[3], e[1] / e[3], e[2] / e[3]]; below.set(k, c[1] < waistY); if (e[3] >= it.nr * 0.02) big.push([c, c[1] < waistY]); }
+    for (const [k, e] of sum) {
+      if (e[3] >= it.nr * 0.02 || !big.length) continue;
+      const c = [e[0] / e[3], e[1] / e[3], e[2] / e[3]];
+      let bd = Infinity;
+      for (const [g, bl] of big) { const d = (g[0] - c[0]) ** 2 + (g[1] - c[1]) ** 2 + (g[2] - c[2]) ** 2; if (d < bd) { bd = d; below.set(k, bl); } }
+    }
+    const keep: number[] = [];
+    for (let t = 0; t < idx.length; t += 3) if (below.get(find(idx[t])) === (it.part === 'bottom')) keep.push(idx[t], idx[t + 1], idx[t + 2]);
+    idx = new Uint32Array(keep);
+    // la parte di sopra un poco più fuori: la camicia sta sopra la cintura dei pantaloni
+    if (it.part === 'top') {
+      const nn = smoothNormals(pp, vm, idx, it.nv, (r) => vm[r]);
+      const done = new Uint8Array(it.nv);
+      for (let r = 0; r < it.nr; r++) { const i = vm[r]; if (done[i]) continue; done[i] = 1; for (let k = 0; k < 3; k++) pp[i * 3 + k] += nn[r * 3 + k] * 0.003; }
+    }
+  }
+  const usedM = new Uint8Array(it.nv);
+  for (let t = 0; t < idx.length; t++) usedM[vm[idx[t]]] = 1;
+  const used: number[] = [];
+  usedM.forEach((u, i) => { if (u) used.push(i); });
+  // pelle coperta: a meno di 2 cm da un vertice della parte scelta
+  let near: ((x: number, y: number, z: number) => boolean) | null = null;
+  if (it.part) {
+    const C = 0.02, grid = new Map<string, number[]>();
+    const key = (a: number, c: number, d: number) => `${a},${c},${d}`;
+    // la griglia si fa alla prima domanda: l'orlo della maglia può essere stato allungato nel frattempo
+    const fill = () => { for (const i of used) { const k = key(Math.floor(pp[i * 3] / C), Math.floor(pp[i * 3 + 1] / C), Math.floor(pp[i * 3 + 2] / C)); const l = grid.get(k); if (l) l.push(i); else grid.set(k, [i]); } };
+    // vicino all'orlo aperto (vita dei pantaloni, fondo della maglia) la pelle resta, altrimenti si
+    // aprono buchi: è coperta solo se la stoffa continua oltre di lei (sopra per i pantaloni, sotto per la maglia)
+    const up = it.part === 'bottom' ? 1 : -1;
+    near = (x, y, z) => {
+      if (!grid.size) fill();
+      const cx = Math.floor(x / C), cy = Math.floor(y / C), cz = Math.floor(z / C);
+      let close = false, beyond = false;
+      for (let a = -2; a <= 2; a++) for (let c = -2; c <= 2; c++) for (let d = -2; d <= 2; d++) {
+        const l = grid.get(key(cx + a, cy + c, cz + d));
+        if (l) for (const i of l) {
+          const dx = pp[i * 3] - x, dy = pp[i * 3 + 1] - y, dz = pp[i * 3 + 2] - z, d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 < C * C) close = true;
+          if (d2 < 0.035 * 0.035 && dy * up > 0.012) beyond = true;
+          if (close && beyond) return true;
+        }
+      }
+      return false;
+    };
+  }
+  return { pp, bw, idx, used, near };
+}
+
 export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: string): Promise<THREE.Group> {
   await loadBase();
   const m = man!;
@@ -248,23 +348,73 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
     return s;
   };
 
+  const armBones = new Set(m.bones.map((x, i) => (/arm|wrist|finger|metacarpal|clavicle|shoulder|hand/.test(x.name) ? i : -1)).filter((i) => i >= 0));
+  type Fit = ReturnType<typeof fitItem>;
+  const extendHem = (top: Fit, bot: Fit) => {
+    const sp = heads[m.bones.findIndex((b) => b.name === 'spine04')], cx = sp.x, cz = sp.z;
+    const S = 48, L = 0.1, MAXD = 0.09;
+    const armW = (f: Fit, i: number) => { let w = 0; for (const [bi, ww] of f.bw[i]) if (armBones.has(bi)) w += ww; return w; };
+    const ang = (x: number, z: number) => ((Math.atan2(z - cz, x - cx) / (2 * Math.PI) + 1) % 1) * S;
+    const hem = new Array(S).fill(Infinity), btop = new Array(S).fill(-Infinity);
+    const torso = top.used.filter((i) => armW(top, i) < 0.3);
+    for (const i of torso) { const s = Math.floor(ang(top.pp[i * 3], top.pp[i * 3 + 2])); hem[s] = Math.min(hem[s], top.pp[i * 3 + 1]); }
+    for (const i of bot.used) { const s = Math.floor(ang(bot.pp[i * 3], bot.pp[i * 3 + 2])); btop[s] = Math.max(btop[s], bot.pp[i * 3 + 1]); }
+    let dy = hem.map((h, s) => (isFinite(h) && isFinite(btop[s]) ? Math.min(MAXD, Math.max(0, h - (btop[s] - 0.03))) : 0));
+    for (let k = 0; k < 2; k++) dy = dy.map((d, s) => Math.max(d, (dy[(s + S - 1) % S] + dy[(s + 1) % S]) / 2));
+    if (Math.max(...dy) < 0.003) return;
+    const at = (arr: number[], a: number) => { const s0 = Math.floor(a) % S, t = a - Math.floor(a); return arr[s0] * (1 - t) + arr[(s0 + 1) % S] * t; };
+    // quanto è largo il corpo (e i pantaloni) a ogni altezza e angolo: la stoffa allungata ci resta sopra
+    const RS = 64, YB = 0.01, rad = new Map<number, number>();
+    const put = (x: number, y: number, z: number, add: number) => { const k = Math.floor(y / YB) * RS + Math.floor(ang(x, z) / S * RS), r = Math.hypot(x - cx, z - cz) + add; if (r > (rad.get(k) ?? 0)) rad.set(k, r); };
+    const ylo = Math.min(...hem.filter(isFinite)) - MAXD - 0.02, yhi = waistY + 0.05;
+    for (let i = 0; i < m.nv; i++) {
+      const y = pos[i * 3 + 1]; if (y < ylo || y > yhi) continue;
+      let w = 0; for (let q = 0; q < 4; q++) if (armBones.has(skinI[i * 4 + q])) w += skinW[i * 4 + q] / 255;
+      if (w < 0.3) put(pos[i * 3], y, pos[i * 3 + 2], 0.011);
+    }
+    for (const i of bot.used) put(bot.pp[i * 3], bot.pp[i * 3 + 1], bot.pp[i * 3 + 2], 0.005);
+    const need = (a: number, y: number) => { let r = 0; const yb = Math.floor(y / YB), ab = Math.floor(a / S * RS); for (let dy2 = -1; dy2 <= 1; dy2++) for (let da = -1; da <= 1; da++) r = Math.max(r, rad.get((yb + dy2) * RS + ((ab + da + RS) % RS)) ?? 0); return r; };
+    for (const i of torso) {
+      const x = top.pp[i * 3], y = top.pp[i * 3 + 1], z = top.pp[i * 3 + 2], a = ang(x, z);
+      const h = y - at(hem.map((v) => (isFinite(v) ? v : y)), a);
+      if (h > L) continue;
+      const ny = y - at(dy, a) * (1 - Math.max(0, h) / L);
+      const r0 = Math.hypot(x - cx, z - cz), r1 = Math.max(r0, need(a, ny));
+      top.pp[i * 3] = cx + (x - cx) * r1 / r0; top.pp[i * 3 + 1] = ny; top.pp[i * 3 + 2] = cz + (z - cz) * r1 / r0;
+    }
+  };
   // oggetti scelti
   const want: Item[] = [];
   const pick = (kind: string, name: string) => { const it = m.items.find((x) => x.kind === kind && x.name === name); if (it) want.push(it); };
   pick('occhi', 'high-poly'); pick('ciglia', 'eyelashes01'); pick('denti', 'teeth_base');
   if (look.brows) pick('sopracciglia', look.brows);
   if (look.hair) pick('capelli', look.hair);
-  if (look.outfit) pick('abito', look.outfit);
+  // abiti: sopra e sotto possono venire da abiti diversi; la salopette è un pezzo unico
+  const topId = look.top ?? look.outfit ?? '', botId = look.bottom ?? look.outfit ?? '';
+  const pickPart = (name: string, part?: 'top' | 'bottom') => { const it = m.items.find((x) => x.kind === 'abito' && x.name === name); if (it) want.push(part ? { ...it, part } : it); };
+  if (topId && (WHOLE_SUITS.includes(topId) || topId === botId)) pickPart(topId);
+  else { if (topId) pickPart(topId, 'top'); if (botId && !WHOLE_SUITS.includes(botId)) pickPart(botId, 'bottom'); }
   if (look.shoes) pick('scarpe', look.shoes);
   if (look.hat) pick('cappello', look.hat);
   const ord = (k: string) => (k === 'cappello' ? 0 : k === 'scarpe' ? 2 : 1); // cappello prima dei capelli, orlo dei pantaloni prima delle scarpe
   want.sort((a, b) => ord(a.kind) - ord(b.kind));
   const bins = await Promise.all(want.map(itemBin));
   let hemY = Infinity, hatY = Infinity;
+  const waistY = heads[m.bones.findIndex((b) => b.name === 'spine04')].y;
+  const fits = want.map((it, n) => fitItem(it, bins[n], pos, skinI, skinW, waistY));
+  {
+    // maglia di un abito e pantaloni di un altro: se tra i due resta pelle, l'orlo della maglia scende a coprirla
+    // (il top sportivo resta corto: lì la pancia scoperta è voluta)
+    const ti = want.findIndex((x) => x.part === 'top'), bj = want.findIndex((x) => x.part === 'bottom');
+    if (ti >= 0 && bj >= 0 && want[ti].name !== 'female_sportsuit01') extendHem(fits[ti], fits[bj]);
+  }
 
-  // pelle: niente sotto gli abiti (non buca il tessuto)
+  // pelle: niente sotto gli abiti (non buca il tessuto); di un abito diviso, solo sotto la parte scelta
   const hidden = new Uint8Array(m.nv);
-  for (const it of want) for (const [a, b] of it.del || []) for (let i = a; i <= b; i++) hidden[i] = 1;
+  want.forEach((it, n) => {
+    const f = fits[n];
+    for (const [a, b] of it.del || []) for (let i = a; i <= b; i++) if (!f.near || f.near(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])) hidden[i] = 1;
+  });
   const rv = new Uint16Array(baseBuf!, m.bodyVert, m.nr);
   const allIdx = new Uint32Array(baseBuf!, m.bodyIdx, m.ni);
   const keep: number[] = [];
@@ -293,41 +443,70 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
     skinned(geo, mat, 'pelle');
   }
 
+  // intimo: una fascia aderente ricavata dalla pelle stessa (slip; per la donna anche la fascia sul seno),
+  // solo dove non c'è già un abito
+  if (look.under) {
+    const hasTop = want.some((x) => x.kind === 'abito' && x.part !== 'bottom');
+    const hasBot = want.some((x) => x.kind === 'abito' && x.part !== 'top');
+    const bi = (n: string) => m.bones.findIndex((x) => x.name === n);
+    const arm = new Set(m.bones.map((x, i) => (/arm|wrist|finger|metacarpal|clavicle|shoulder/.test(x.name) ? i : -1)).filter((i) => i >= 0));
+    const breast = new Set([bi('breast.L'), bi('breast.R')]);
+    const dom = (i: number) => { let best = 0, bw = -1; for (let q = 0; q < 4; q++) if (skinW[i * 4 + q] > bw) { bw = skinW[i * 4 + q]; best = skinI[i * 4 + q]; } return best; };
+    const hipY = heads[bi('upperleg01.L')].y, waist = heads[bi('spine04')].y, H = heads[bi('head')].y - hipY;
+    const bands: [number, number][] = [];
+    if (!hasBot) bands.push([hipY - 0.1 * H, waist - 0.02 * H]);
+    if (!hasTop && gender === 'donna') {
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < m.nv; i++) { let w = 0; for (let q = 0; q < 4; q++) if (breast.has(skinI[i * 4 + q])) w += skinW[i * 4 + q] / 255; if (w > 0.35) { lo = Math.min(lo, pos[i * 3 + 1]); hi = Math.max(hi, pos[i * 3 + 1]); } }
+      if (lo < hi) bands.push([lo - 0.012 * H, lo + (hi - lo) * 0.7]);
+    }
+    // triangoli della pelle tagliati sui bordi delle fasce: orli dritti, non a scalini
+    const nn = smoothNormals(pos, rv, allIdx, m.nv, (r) => rv[r]);
+    type V = { p: number[]; n: number[]; y: number; r: number };
+    const vert = (r: number): V => { const i = rv[r]; return { p: [0, 1, 2].map((k) => pos[i * 3 + k] + nn[r * 3 + k] * 0.0025), n: [nn[r * 3], nn[r * 3 + 1], nn[r * 3 + 2]], y: pos[i * 3 + 1], r }; };
+    const lerp = (a: V, b: V, t: number): V => ({ p: a.p.map((x, k) => x + (b.p[k] - x) * t), n: a.n.map((x, k) => x + (b.n[k] - x) * t), y: a.y + (b.y - a.y) * t, r: t < 0.5 ? a.r : b.r });
+    const clip = (poly: V[], keepIn: (v: V) => number) => {
+      const out: V[] = [];
+      for (let k = 0; k < poly.length; k++) {
+        const a = poly[k], b = poly[(k + 1) % poly.length], da = keepIn(a), db = keepIn(b);
+        if (da >= 0) out.push(a);
+        if ((da >= 0) !== (db >= 0)) out.push(lerp(a, b, da / (da - db)));
+      }
+      return out;
+    };
+    const P: number[] = [], N: number[] = [], SI: number[] = [], SW: number[] = [];
+    for (let t = 0; t < keep.length; t += 3) {
+      const tri = [keep[t], keep[t + 1], keep[t + 2]];
+      if (tri.some((r) => hidden[rv[r]] || arm.has(dom(rv[r])))) continue;
+      for (const [a, c] of bands) {
+        const ys = tri.map((r) => pos[rv[r] * 3 + 1]);
+        if (Math.max(...ys) < a || Math.min(...ys) > c) continue;
+        let poly = clip(tri.map(vert), (v) => v.y - a);
+        if (poly.length >= 3) poly = clip(poly, (v) => c - v.y);
+        for (let k = 1; k + 1 < poly.length; k++) for (const v of [poly[0], poly[k], poly[k + 1]]) {
+          P.push(...v.p); N.push(...v.n);
+          const i = rv[v.r];
+          for (let q = 0; q < 4; q++) { SI.push(skinI[i * 4 + q]); SW.push(skinW[i * 4 + q] / 255); }
+        }
+      }
+    }
+    if (P.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+      geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4));
+      geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+      skinned(geo, MAT({ color: new THREE.Color(UNDER_COLORS[look.under] || UNDER_COLORS.nero), roughness: 0.68, side: THREE.DoubleSide }), 'intimo');
+    }
+  }
+
   // oggetti agganciati: ogni vertice segue tre vertici della pelle (con il loro peso sulle ossa)
-  const v3 = new THREE.Vector3();
   for (let n = 0; n < want.length; n++) {
     const it = want[n], b = bins[n];
-    const refs = new Uint16Array(b, it.refs, it.nv * 3), w = new Float32Array(b, it.w, it.nv * 3), off = new Float32Array(b, it.off, it.nv * 3);
-    const sc = (ax: 'x' | 'y' | 'z', k: number) => {
-      const s = it.scale[ax];
-      if (!s) return 1;
-      return Math.abs(pos[s[0] * 3 + k] - pos[s[1] * 3 + k]) / (s[2] * 0.1);
-    };
-    const sx = sc('x', 0) * 0.1, sy = sc('y', 1) * 0.1, sz = sc('z', 2) * 0.1;
-    const pp = new Float32Array(it.nv * 3);
-    const bw: Map<number, number>[] = [];
-    for (let i = 0; i < it.nv; i++) {
-      v3.set(0, 0, 0);
-      const acc = new Map<number, number>();
-      for (let k = 0; k < 3; k++) {
-        const r = refs[i * 3 + k], ww = w[i * 3 + k];
-        v3.x += pos[r * 3] * ww; v3.y += pos[r * 3 + 1] * ww; v3.z += pos[r * 3 + 2] * ww;
-        if (ww > 0) for (let q = 0; q < 4; q++) { const bi = skinI[r * 4 + q], bwv = skinW[r * 4 + q] / 255 * ww; if (bwv > 0) acc.set(bi, (acc.get(bi) || 0) + bwv); }
-      }
-      pp[i * 3] = v3.x + off[i * 3] * sx; pp[i * 3 + 1] = v3.y + off[i * 3 + 1] * sy; pp[i * 3 + 2] = v3.z + off[i * 3 + 2] * sz;
-      bw.push(acc);
-    }
-    // gli abiti stanno un filo sopra la pelle: niente pelle che affiora a colletto e spalle
-    if (it.kind === 'abito') {
-      const nn = smoothNormals(pp, new Uint16Array(b, it.vert, it.nr), new Uint32Array(b, it.idx, it.ni), it.nv, (r) => new Uint16Array(b, it.vert, it.nr)[r]);
-      const vm = new Uint16Array(b, it.vert, it.nr);
-      const done = new Uint8Array(it.nv);
-      for (let r = 0; r < it.nr; r++) { const i = vm[r]; if (done[i]) continue; done[i] = 1; for (let k = 0; k < 3; k++) pp[i * 3 + k] += nn[r * 3 + k] * 0.004; }
-      hemY = Infinity;
-      for (let i = 0; i < it.nv; i++) hemY = Math.min(hemY, pp[i * 3 + 1]);
-    }
+    const { pp, bw } = fits[n];
+    if (it.kind === 'abito') for (const i of fits[n].used) hemY = Math.min(hemY, pp[i * 3 + 1]);
     const vmap = new Uint16Array(b, it.vert, it.nr);
-    let idx = new Uint32Array(b, it.idx, it.ni);
+    let idx = fits[n].idx;
     // calze e gambali dentro i pantaloni lunghi: si tolgono, altrimenti bucano l'orlo
     if (it.kind === 'scarpe' && hemY < 0.25) {
       const keep: number[] = [];
