@@ -1376,13 +1376,57 @@ export class Engine {
 
   bindNav() {
     const el = this.renderer.domElement;
-    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; grab?: Grab | null } | null = null;
+    let drag: { x: number; y: number; btn: number; moved: boolean; shift: boolean; grab?: Grab | null; touch?: boolean } | null = null;
     // dita sullo schermo: due dita = pizzico per avanzare/arretrare e trascinamento per spostarsi
     const touches = new Map<number, { x: number; y: number }>();
-    let pinch: { d: number; x: number; y: number } | null = null;
+    let pinch: { d: number; x: number; y: number; a: number } | null = null;
     const pinchState = () => {
       const [a, b] = [...touches.values()];
-      return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, a: Math.atan2(b.y - a.y, b.x - a.x) };
+    };
+    // con le dita la visuale gira attorno a ciò che si sta guardando (perno al centro dell'inquadratura)
+    let pivot: THREE.Vector3 | null = null;
+    const findPivot = () => {
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      // una persona vicino al centro dell'inquadratura fa da perno (all'altezza del petto, sulla linea di vista)
+      const W = this.container.clientWidth, H = this.container.clientHeight;
+      let best: THREE.Vector3 | null = null, bd = Infinity;
+      for (const o of this.people.values()) {
+        const j = (o.obj.userData.joints as Record<string, THREE.Object3D>)?.chest;
+        if (!j) continue;
+        const c = j.getWorldPosition(new THREE.Vector3());
+        const pr = this.project(c);
+        if (pr.behind) continue;
+        const d = Math.hypot(pr.x - W / 2, pr.y - H / 2);
+        if (d < Math.min(W, H) * 0.4 && d < bd) { bd = d; best = c; }
+      }
+      if (best) {
+        const along = best.clone().sub(this.camera.position).dot(fwd);
+        if (along > 0.5) return this.camera.position.clone().addScaledVector(fwd, along);
+      }
+      const rc = new THREE.Raycaster(this.camera.position.clone(), fwd, 0.05, 30);
+      (rc as any).firstHitOnly = true;
+      const list = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((p) => p.obj), ...[...this.props.values()].map((p) => p.obj)];
+      const h = rc.intersectObjects(list, true).filter((x) => (x.object as any).visible !== false)[0];
+      const d = Math.max(0.8, Math.min(8, h ? h.distance : 3));
+      return this.camera.position.clone().addScaledVector(fwd, d);
+    };
+    const orbit = (dYaw: number, dPitch: number) => {
+      if (!pivot) pivot = findPivot();
+      const off = this.camera.position.clone().sub(pivot);
+      off.applyAxisAngle(new THREE.Vector3(0, 1, 0), dYaw);
+      const r = off.length();
+      // inclinazione attorno al perno, senza passare sopra la verticale
+      const el = Math.asin(Math.max(-1, Math.min(1, off.y / r)));
+      const nel = Math.max(-1.2, Math.min(1.35, el + dPitch));
+      const hz = Math.hypot(off.x, off.z) || 1e-6;
+      off.set(off.x / hz * Math.cos(nel) * r, Math.sin(nel) * r, off.z / hz * Math.cos(nel) * r);
+      this.camera.position.copy(pivot).add(off);
+      const dir = pivot.clone().sub(this.camera.position).normalize();
+      this.yaw = Math.atan2(-dir.x, -dir.z);
+      this.pitch = Math.asin(Math.max(-1, Math.min(1, dir.y)));
+      this.applyLook();
+      this.dirty = true;
     };
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerdown', (e) => {
@@ -1393,13 +1437,15 @@ export class Engine {
           if (drag?.grab && drag.moved) drag.grab.end?.();
           drag = null;
           pinch = pinchState();
+          pivot = null;
           el.setPointerCapture(e.pointerId);
           return;
         }
         if (touches.size > 2) return;
       }
       const grab = e.button === 0 ? this.onGrab?.(e) : null;
-      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, grab };
+      pivot = null;
+      drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: false, shift: e.shiftKey, grab, touch: e.pointerType === 'touch' };
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
@@ -1410,7 +1456,12 @@ export class Engine {
           const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
           this.camera.position.addScaledVector(right, -(n.x - pinch.x) * 0.006).addScaledVector(new THREE.Vector3(0, 1, 0), (n.y - pinch.y) * 0.006);
           this.dolly((n.d - pinch.d) * 0.009, n.x, n.y);
+          // rotazione delle due dita: la visuale gira attorno al perno
+          let da = n.a - pinch.a;
+          if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
+          if (Math.abs(da) > 0.002) { pivot = null; orbit(-da, 0); pivot = null; }
           pinch = n;
+          this.applyLook();
           return;
         }
       }
@@ -1426,6 +1477,12 @@ export class Engine {
       }
       drag.moved = true;
       drag.x = e.clientX; drag.y = e.clientY;
+      if (drag.touch) {
+        // un dito: si gira attorno a ciò che si guarda, in orizzontale e in verticale
+        const k = Math.PI / Math.max(320, this.container.clientWidth);
+        orbit(-dx * k, dy * k * 0.6);
+        return;
+      }
       if (drag.btn === 2 || drag.btn === 1 || drag.shift) {
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
         const up = new THREE.Vector3(0, 1, 0);
