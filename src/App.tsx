@@ -288,7 +288,7 @@ export default function App() {
           <div id="dock" className="glass chrome">
             {useStore.getState().room && (
               <button className={`dbtn ${panel === 'room' ? 'on' : ''}`} onClick={() => setPanel(panel === 'room' ? null : 'room')}>
-                <svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6v10H3z" /><path d="M9 20v-6h6v6" /></svg><span className="t">Stanza</span>
+                <svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6v10H3z" /><path d="M9 20v-6h6v6" /></svg><span className="t">{useStore.getState().room?.outdoor ? 'Luogo' : 'Stanza'}</span>
               </button>
             )}
             <button className={`dbtn ${panel === 'lights' ? 'on' : ''}`} onClick={() => setPanel(panel === 'lights' ? null : 'lights')}>

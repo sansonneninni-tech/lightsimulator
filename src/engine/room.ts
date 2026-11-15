@@ -21,6 +21,8 @@ export interface Opening {
   closed?: boolean; // oscurante chiuso: non entra luce
 }
 
+export type OutdoorKind = 'deserto' | 'spiaggia' | 'citta';
+
 export interface RoomSpec {
   width: number;   // x
   depth: number;   // z
@@ -28,6 +30,8 @@ export interface RoomSpec {
   wall: string;
   floor: string;
   openings: Opening[];
+  // esterno: niente pareti né soffitto; larghezza e profondità sono l'area del set
+  outdoor?: OutdoorKind;
 }
 
 export interface WindowInfoLite {
@@ -111,12 +115,12 @@ export function windowInfos(r: RoomSpec, onlyOpen = false): WindowInfoLite[] {
 // ---------------- texture procedurali ----------------
 const texCache = new Map<string, THREE.Texture>();
 
-function rng(seed: number) {
+export function rng(seed: number) {
   let s = seed >>> 0;
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-function canvasTex(key: string, size: number, draw: (ctx: CanvasRenderingContext2D, n: number) => void, srgb = true) {
+export function canvasTex(key: string, size: number, draw: (ctx: CanvasRenderingContext2D, n: number) => void, srgb = true) {
   const k = key + size;
   const hit = texCache.get(k);
   if (hit) return hit;
@@ -133,7 +137,7 @@ function canvasTex(key: string, size: number, draw: (ctx: CanvasRenderingContext
   return t;
 }
 
-function noise(ctx: CanvasRenderingContext2D, n: number, amount: number, seed: number, scale = 1) {
+export function noise(ctx: CanvasRenderingContext2D, n: number, amount: number, seed: number, scale = 1) {
   const r = rng(seed);
   const img = ctx.getImageData(0, 0, n, n);
   const d = img.data;
@@ -144,7 +148,7 @@ function noise(ctx: CanvasRenderingContext2D, n: number, amount: number, seed: n
   ctx.putImageData(img, 0, 0);
 }
 
-function blotches(ctx: CanvasRenderingContext2D, n: number, count: number, alpha: number, seed: number, light = '#fff', dark = '#000') {
+export function blotches(ctx: CanvasRenderingContext2D, n: number, count: number, alpha: number, seed: number, light = '#fff', dark = '#000') {
   const r = rng(seed);
   for (let i = 0; i < count; i++) {
     const x = r() * n, y = r() * n, rad = (0.03 + r() * 0.12) * n;

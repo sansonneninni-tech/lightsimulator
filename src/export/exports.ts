@@ -11,6 +11,7 @@ import { POSES } from '../engine/mannequin';
 import { defaultLook, WHOLE_SUITS } from '../engine/human';
 import { sunSky, fmtHour, WEATHER } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
+import { outdoorPlanLines, OUTDOORS } from '../engine/outdoor';
 
 export interface PlanInput {
   scene: SceneSnapshot;
@@ -39,7 +40,15 @@ export function luxAtTarget(L: LightState, skyLux: number) {
 export function planSVG(inp: PlanInput, opts: { width?: number; height?: number } = {}) {
   const W = opts.width || 1000, H = opts.height || 640;
   const { scene, recon, camera } = inp;
-  const [x0, , z0] = recon.room.min, [x1, , z1] = recon.room.max;
+  let [x0, , z0] = recon.room.min, [x1, , z1] = recon.room.max;
+  // esterni: niente pareti; la pianta abbraccia il set, la camera, le luci e le persone
+  const ext = scene.room?.outdoor ? scene.room : null;
+  const set = { x0, z0, x1, z1 };
+  if (ext) {
+    const pts: number[][] = [camera.position, ...scene.lights.map((L) => L.position), ...scene.people.map((p) => p.position), ...(scene.furniture || []).map((f) => f.position)];
+    for (const p of pts) { x0 = Math.min(x0, p[0] - 1.5); x1 = Math.max(x1, p[0] + 1.5); z0 = Math.min(z0, p[2] - 1.5); z1 = Math.max(z1, p[2] + 1.5); }
+    x0 -= 1; x1 += 1; z0 -= 3; z1 += 1;
+  }
   const pad = 70;
   // pianta a sinistra, legenda numerata a destra (i numeri rimandano alla lista materiale)
   const legendW = Math.round(W * 0.32);
@@ -55,7 +64,28 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   // griglia 1 m
   for (let x = Math.ceil(x0); x <= x1; x++) out += `<line x1="${X(x)}" y1="${Z(z0)}" x2="${X(x)}" y2="${Z(z1)}" stroke="#f0f0f0"/>`;
   for (let z = Math.ceil(z0); z <= z1; z++) out += `<line x1="${X(x0)}" y1="${Z(z)}" x2="${X(x1)}" y2="${Z(z)}" stroke="#f0f0f0"/>`;
-  out += `<rect x="${X(x0)}" y="${Z(z0)}" width="${(x1 - x0) * s}" height="${(z1 - z0) * s}" fill="none" stroke="#111" stroke-width="3"/>`;
+  if (ext) {
+    // scenario: mare, facciate e cordoli; poi l'area del set tratteggiata
+    const lines = outdoorPlanLines(ext, x0, x1, z0, z1);
+    const riva = lines.filter((l) => l.kind === 'riva');
+    if (riva.length) {
+      const d = riva.map((l, i) => `${i ? 'L' : 'M'}${X(l.a[0])},${Z(Math.max(z0, l.a[1]))}`).join(' ') + ` L${X(riva[riva.length - 1].b[0])},${Z(Math.max(z0, riva[riva.length - 1].b[1]))} L${X(x1)},${Z(z0)} L${X(x0)},${Z(z0)} Z`;
+      out += `<path d="${d}" fill="#e3eff8" stroke="none"/>`;
+      out += `<path d="${riva.map((l, i) => `${i ? 'L' : 'M'}${X(l.a[0])},${Z(Math.max(z0, l.a[1]))}`).join(' ')}" fill="none" stroke="#6aa9ff" stroke-width="2"/>`;
+      out += `<text x="${X(x0) + 10}" y="${Z(z0) + 18}" font-size="11" fill="#5a86b8">Mare</text>`;
+    }
+    for (const l of lines) {
+      if (l.kind === 'facciata') {
+        const outer = l.a[0] < 0 ? x0 : x1;
+        const xa = Math.min(l.a[0], outer), xb = Math.max(l.a[0], outer);
+        if (xb > xa) out += `<rect x="${X(xa)}" y="${Z(z0)}" width="${(xb - xa) * s}" height="${(z1 - z0) * s}" fill="#ecebe8"/>`;
+        out += `<line x1="${X(l.a[0])}" y1="${Z(z0)}" x2="${X(l.b[0])}" y2="${Z(z1)}" stroke="#111" stroke-width="3"/>`;
+      } else if (l.kind === 'cordolo') out += `<line x1="${X(l.a[0])}" y1="${Z(z0)}" x2="${X(l.b[0])}" y2="${Z(z1)}" stroke="#999" stroke-width="1.5"/>`;
+    }
+    if (ext.outdoor === 'citta') { out += `<text x="${X(-ext.width / 2) - 8}" y="${Z(z0) + 18}" text-anchor="end" font-size="11" fill="#888">Palazzi</text><text x="${X(0)}" y="${Z(z0) + 18}" text-anchor="middle" font-size="11" fill="#888">Strada</text>`; }
+    out += `<rect x="${X(set.x0)}" y="${Z(set.z0)}" width="${(set.x1 - set.x0) * s}" height="${(set.z1 - set.z0) * s}" fill="none" stroke="#111" stroke-width="1.5" stroke-dasharray="8 6"/>`;
+    out += `<text x="${X(set.x0) + 6}" y="${Z(set.z1) - 8}" font-size="11" fill="#444">Area del set · ${esc(OUTDOORS.find((o) => o.id === ext.outdoor)?.name || '')} · ${(set.x1 - set.x0).toFixed(0)} × ${(set.z1 - set.z0).toFixed(0)} m</text>`;
+  } else out += `<rect x="${X(x0)}" y="${Z(z0)}" width="${(x1 - x0) * s}" height="${(z1 - z0) * s}" fill="none" stroke="#111" stroke-width="3"/>`;
   // finestre
   for (const w of recon.windows) {
     const c = new THREE.Vector3(...w.center), r = new THREE.Vector3(...w.right);
