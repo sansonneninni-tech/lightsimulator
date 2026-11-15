@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { useStore, PropState } from './store';
 import { eng } from './engineRef';
-import { makeLight, FIXTURES, newId, fixtureById, illuminanceAt } from './engine/photometry';
+import { makeLight, FIXTURES, newId, fixtureById, illuminanceAt, fmtStop, LightState } from './engine/photometry';
 import { PersonState, PoseId, poseJoints, POSES } from './engine/mannequin';
 import { PROP_KINDS } from './engine/Engine';
 import { roomBounds } from './engine/room';
@@ -222,6 +222,9 @@ export const SCHEMES = [
   { id: 'rembrandt', name: 'Rembrandt', lights: [
     { type: 'Pannello', name: 'Chiave', a: 45, h: 0.6, d: 1.8, rel: 0 },
     { type: 'Pannello', name: 'Riempimento', a: -35, h: 0, d: 2.2, rel: -2 }] },
+  { id: 'loop', name: 'Loop', lights: [
+    { type: 'Pannello', name: 'Chiave', a: 30, h: 0.35, d: 1.9, rel: 0 },
+    { type: 'Pannello', name: 'Riempimento', a: -40, h: 0, d: 2.2, rel: -1.5 }] },
   { id: 'farfalla', name: 'Farfalla', lights: [
     { type: 'Fresnel', name: 'Chiave', a: 0, h: 0.85, d: 1.7, rel: 0 },
     { type: 'Pannello', name: 'Riempimento', a: 0, h: -0.55, d: 1.3, rel: -1.5 }] },
@@ -262,6 +265,53 @@ export function applyScheme(personId: string, schemeId: string) {
   });
   useStore.setState({ lights: [...kept, ...made], selection: { type: 'person', id: personId } });
   s.showToast(`Schema ${sc.name}: ${made.length === 1 ? 'una luce' : made.length + ' luci'} attorno a ${P.name}.`, true);
+}
+
+// esposizione al contrario: diaframma, ISO e otturatore restano quelli scelti, cambiano le luci.
+// Tutte le luci aggiunte salgono o scendono insieme (i rapporti restano), finché la chiave sul viso
+// legge esattamente il diaframma della camera. Finestre e sole non si toccano.
+export function faceExposure(personId: string) {
+  const e = eng();
+  const fc = e?.faceContrast(personId);
+  if (!fc) return null;
+  const c = useStore.getState().cam;
+  const want = (250 * c.fStop * c.fStop) / (c.shutter * c.iso);
+  return { stops: Math.log2(fc.key / want), key: fc.key };
+}
+
+export function exposeFace(personId: string) {
+  const s = useStore.getState();
+  const e = eng();
+  if (!e) return;
+  const mine = (l: LightState) => l.origin === 'aggiunta' && l.on;
+  if (!s.lights.some(mine)) { s.showToast('Non ci sono luci tue accese da regolare: aggiungine una o scegli uno schema.'); return; }
+  s.snapshot();
+  const before = useStore.getState().lights;
+  let capped = false;
+  for (let i = 0; i < 4; i++) {
+    const ex = faceExposure(personId);
+    if (!ex || Math.abs(ex.stops) < 0.04) break;
+    const cur = useStore.getState().lights;
+    capped = false;
+    const next = cur.map((l) => {
+      if (!mine(l)) return l;
+      const v = l.stops - ex.stops;
+      const c = Math.max(-8, Math.min(3, v));
+      if (c !== v) capped = true;
+      return { ...l, stops: Math.round(c * 10) / 10 };
+    });
+    useStore.setState({ lights: next }); // il motore si aggiorna subito (sottoscrizione in App)
+  }
+  const ex = faceExposure(personId);
+  const c = useStore.getState().cam;
+  if (ex && Math.abs(ex.stops) > 0.1 && !capped) {
+    // le luci aggiunte quasi non arrivano sul viso (lo illumina la finestra): si lascia tutto com'era
+    useStore.setState({ lights: before });
+    s.showToast('Il viso è illuminato quasi solo dalla luce naturale: le tue luci non lo cambiano. Regola il diaframma, la luce naturale o scegli uno schema.');
+    return;
+  }
+  if (ex && Math.abs(ex.stops) > 0.1 && capped) s.showToast(ex.stops < 0 ? `Le luci sono al massimo e il viso resta ${Math.abs(ex.stops).toFixed(1).replace('.', ',')} stop sotto f/${fmtStop(c.fStop)}: avvicinale o usa apparecchi più potenti.` : `Le luci sono al minimo e il viso resta ${ex.stops.toFixed(1).replace('.', ',')} stop sopra: allontanale o chiudi il diaframma.`);
+  else s.showToast(`Viso esposto per f/${fmtStop(c.fStop)} a ISO ${c.iso}. I rapporti tra le luci restano gli stessi.`);
 }
 
 // confronto A/B: due versioni delle luci, si passa dall'una all'altra

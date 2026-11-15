@@ -222,24 +222,67 @@ export function saveProject() {
   s.showToast('Progetto salvato. Puoi riaprirlo o mandarlo a chi lavora con te.');
 }
 
+// stanza costruita da un file o da un link
+function openRoomData(data: any) {
+  const e = eng()!;
+  const sc = data.scene;
+  e.clearBuilt();
+  useStore.setState({
+    phase: 'ready', abCur: 'A', abOther: null, status: '', recon: null, photos: [], placeName: data.placeName || 'Stanza',
+    room: sc.room, furniture: sc.furniture || [], lights: sc.lights || [], people: sc.people || [], props: sc.props || [],
+    sun: sc.sun, cam: sc.cam, ambient: 0, shots: data.shots || [], past: [], future: [], selection: null, manikin: null,
+  });
+  e.apply(snapshotOf());
+  e.resetView();
+}
+
+// link da condividere: tutto il progetto (senza scatti) compresso nel link stesso, niente server
+const b64url = (u: Uint8Array) => { let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64url = (s: string) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/')); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+async function gz(text: string, mode: 'gzip' | 'gunzip') {
+  const src = mode === 'gzip' ? new Blob([text]).stream().pipeThrough(new CompressionStream('gzip')) : new Blob([unb64url(text) as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const buf = new Uint8Array(await new Response(src).arrayBuffer());
+  return mode === 'gzip' ? b64url(buf) : new TextDecoder().decode(buf);
+}
+
+export async function shareLink() {
+  const s = useStore.getState();
+  if (!s.room) { s.showToast('Il link si può creare per le stanze costruite a mano.'); return; }
+  const data = { app: 'lightsimulator', version: 2, kind: 'stanza', placeName: s.placeName, scene: snapshotOf() };
+  const url = `${location.origin}${location.pathname}#p=${await gz(JSON.stringify(data), 'gzip')}`;
+  try {
+    if (matchMedia('(hover: none) and (pointer: coarse)').matches && (navigator as any).share) { await (navigator as any).share({ title: s.placeName, url }); return; }
+    await navigator.clipboard.writeText(url);
+    s.showToast('Link copiato: chi lo apre vede la stessa stanza, con luci, persone e camera.');
+  } catch (e) {
+    if ((e as any)?.name === 'AbortError') return;
+    prompt('Copia il link del progetto:', url);
+  }
+}
+
+export async function openFromLink() {
+  const m = location.hash.match(/^#p=([\w-]+)/);
+  if (!m) return false;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const data = JSON.parse(await gz(m[1], 'gunzip'));
+    if (data.app !== 'lightsimulator' || data.kind !== 'stanza') throw new Error('formato');
+    openRoomData(data);
+    useStore.getState().showToast(`Progetto «${data.placeName || 'Stanza'}» aperto dal link.`);
+    return true;
+  } catch (e) {
+    console.error(e);
+    useStore.getState().showToast('Questo link non si apre: forse è stato tagliato copiandolo.');
+    return false;
+  }
+}
+
 export async function openProject(file: File) {
   const st = useStore.getState;
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== 'lightsimulator') throw new Error('formato');
-    if (data.kind === 'stanza') {
-      const e = eng()!;
-      const sc = data.scene;
-      e.clearBuilt();
-      useStore.setState({
-        phase: 'ready', abCur: 'A', abOther: null, status: '', recon: null, photos: [], placeName: data.placeName || 'Stanza',
-        room: sc.room, furniture: sc.furniture || [], lights: sc.lights || [], people: sc.people || [], props: sc.props || [],
-        sun: sc.sun, cam: sc.cam, ambient: 0, shots: data.shots || [], past: [], future: [], selection: null, manikin: null,
-      });
-      e.apply(snapshotOf());
-      e.resetView();
-      return;
-    }
+    if (data.kind === 'stanza') { openRoomData(data); return; }
     useStore.setState({ phase: 'working', status: 'Apro il progetto…', progress: 1 });
     const img = new Image();
     await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = data.photo; });

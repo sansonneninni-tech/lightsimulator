@@ -1298,6 +1298,74 @@ export class Engine {
     this.dirty = true;
   }
 
+  // guarda verso un punto da una posizione (vista dalla luce, viste rapide)
+  lookFrom(pos: THREE.Vector3, target: THREE.Vector3) {
+    this.camera.position.copy(pos);
+    const d = target.clone().sub(pos).normalize();
+    this.yaw = Math.atan2(-d.x, -d.z);
+    this.pitch = Math.asin(Math.max(-1, Math.min(1, d.y)));
+    this.homeRoll = 0;
+    this.applyLook();
+    this.dirty = true;
+  }
+
+  // dalla luce: la camera al posto dell'apparecchio, puntata dove punta lui
+  viewFromLight(L: LightState) {
+    const p = new THREE.Vector3(...L.position), t = new THREE.Vector3(...L.target);
+    if (t.distanceTo(p) < 0.05) t.copy(p).add(new THREE.Vector3(0, 0, -1));
+    this.lookFrom(p.clone().addScaledVector(t.clone().sub(p).normalize(), 0.12), t);
+  }
+
+  // viste rapide: pianta dall'alto, viso di una persona
+  topView() {
+    const { min, max } = this.bounds;
+    const cx = (min[0] + max[0]) / 2, cz = (min[2] + max[2]) / 2;
+    const half = THREE.MathUtils.degToRad(this.camera.fov) / 2;
+    const span = Math.max(max[2] - min[2], (max[0] - min[0]) / Math.max(0.3, this.camera.aspect)) + 1;
+    const h = Math.min(max[1] + 8.5, span / 2 / Math.tan(half));
+    const pitch = 1.45;
+    this.lookFrom(new THREE.Vector3(cx, h, cz + h / Math.tan(pitch)), new THREE.Vector3(cx, 0, cz));
+  }
+
+  faceView(personId: string) {
+    const o = this.people.get(personId);
+    const head = this.jointWorld(personId, 'head');
+    if (!o || !head) return false;
+    const c = head.add(new THREE.Vector3(0, 0.06, 0));
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(o.obj.getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize();
+    this.lookFrom(c.clone().addScaledVector(fwd, 1.1), c);
+    return true;
+  }
+
+  // a che ora il sole entra dalla finestra e arriva sul viso (nel giorno, stagione e meteo scelti)
+  sunOnFace(personId: string, sun: SunState) {
+    const o = this.people.get(personId);
+    const head = this.jointWorld(personId, 'head');
+    if (!o || !head) return null;
+    const c = head.add(new THREE.Vector3(0, 0.06, 0));
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(o.obj.getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize();
+    const occ = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
+    const rc = new THREE.Raycaster(); (rc as any).firstHitOnly = true; rc.far = 60;
+    const hits: { h: number; s: number }[] = [];
+    for (let h = 4; h <= 21; h += 1 / 12) {
+      const { dir, elevation } = sunDirection({ ...sun, hour: h });
+      if (elevation <= 1) continue;
+      const front = new THREE.Vector3(dir.x, 0, dir.z).normalize().dot(fwd);
+      if (front < 0.15) continue;
+      rc.set(c.clone().addScaledVector(dir, 0.16), dir);
+      if (rc.intersectObjects(occ, true).filter((x) => (x.object as any).visible !== false).length) continue;
+      hits.push({ h, s: front * Math.min(1, Math.cos(THREE.MathUtils.degToRad(elevation)) + 0.2) });
+    }
+    if (!hits.length) return null;
+    const best = hits.reduce((a, b) => (b.s > a.s ? b : a));
+    // il tratto continuo attorno all'ora migliore
+    let from = best.h, to = best.h;
+    const has = (h: number) => hits.some((x) => Math.abs(x.h - h) < 1 / 24);
+    while (has(from - 1 / 12)) from -= 1 / 12;
+    while (has(to + 1 / 12)) to += 1 / 12;
+    return { best: best.h, from, to };
+  }
+
   applyLook() {
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
     this.clampCamera();
@@ -1940,8 +2008,12 @@ export class Engine {
     const ptm = (this.pt as any)._pathTracer.material;
     if (!ptm.userData.mattePatched) {
       const fs = ptm.fragmentShader.replace(/if \( material\.matte && state\.firstRay \) \{\s*gl_FragColor = vec4\( 0\.0 \);\s*break;\s*\}/,
-        'if ( material.matte && state.firstRay ) { ray.origin = stepRayOrigin( ray.origin, ray.direction, - surfaceHit.faceNormal, surfaceHit.dist ); continue; }');
-      if (fs === ptm.fragmentShader) console.warn('matte patch non applicata');
+        'if ( material.matte && state.firstRay ) { ray.origin = stepRayOrigin( ray.origin, ray.direction, - surfaceHit.faceNormal, surfaceHit.dist ); if ( matteSkips < 16 ) { matteSkips ++; i --; } continue; }')
+        // attraversare una parete tolta non conta come rimbalzo: il raggio resta "primo" anche per la
+        // superficie dopo (l'altra faccia della parete, il telaio di una porta). Prima la seconda
+        // superficie si vedeva: stipiti e bordi delle pareti tolte comparivano come colonne bianche.
+        .replace('for ( int i = 0; i < bounces; i ++ ) {', 'int matteSkips = 0;\n\t\t\t\t\tfor ( int i = 0; i < bounces; i ++ ) {');
+      if (fs === ptm.fragmentShader || !fs.includes('int matteSkips = 0;')) console.warn('matte patch non applicata');
       // luce diretta: la libreria la cercava partendo dal lato del rimbalzo scelto a caso; quando il
       // rimbalzo (lucido, ruvido) finisce sotto la superficie, il raggio verso la lampada partiva da
       // dentro la superficie stessa e risultava in ombra. Superfici opache: circa il 20% di luce

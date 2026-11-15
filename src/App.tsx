@@ -8,7 +8,7 @@ import { SelectionCard } from './ui/Cards';
 import { LightsPanel, PeoplePanel, CameraPanel, SkyPanel, PlaceMenu, PanelId } from './ui/Panels';
 import { Roll, Viewer } from './ui/Viewer';
 import Creator from './ui/Creator';
-import { loadPhotos, saveProject, openProject, loadSample, snapshotOf } from './project';
+import { loadPhotos, saveProject, openProject, loadSample, snapshotOf, shareLink, openFromLink } from './project';
 import { addLightAtScreen, addLight, removeSelection, clampToRoom } from './actions';
 import { Start, RoomPanel, FurnitureCard, OpeningCard } from './ui/Room';
 import { moveFurniture, updateOpening, autoExpose, addFurniture } from './build';
@@ -18,6 +18,7 @@ import { fmtStop } from './engine/photometry';
 import { newId } from './engine/photometry';
 import * as THREE from 'three';
 import { shootOnce } from './shoot';
+import { quickView } from './ui/views';
 
 const FC_LEGEND: [string, string][] = [['#730f99', 'Nero'], ['#1a40f2', '−4'], ['#3fbf3f', '18%'], ['#f28cad', 'Pelle'], ['#ffe61a', '+3'], ['#f21a1a', 'Bruciato']];
 
@@ -49,6 +50,10 @@ export default function App() {
     ref.engine = e;
     (window as any).__engine = e;
     (window as any).__store = useStore;
+    // progetto aperto da un link condiviso (anche incollato in questa stessa scheda)
+    setTimeout(() => openFromLink(), 0);
+    const onHash = () => { openFromLink(); };
+    addEventListener('hashchange', onHash);
     (window as any).__actions = { addLight, poseJoints, addFurniture, moveFurniture, closeAll: () => { const r = useStore.getState().room; r?.openings.forEach((o) => { if (o.kind !== 'porta') updateOpening(o.id, { closed: true }); }); } };
     const unsub = useStore.subscribe((s, p) => {
       if (s.lights !== p.lights || s.people !== p.people || s.props !== p.props || s.sun !== p.sun || s.cam !== p.cam || s.ambient !== p.ambient || s.room !== p.room || s.furniture !== p.furniture) e.apply(snapshotOf());
@@ -148,7 +153,7 @@ export default function App() {
       if (useStore.getState().phase !== 'ready' || useStore.getState().meter) return;
       addLightAtScreen(ev.clientX, ev.clientY);
     };
-    return () => { unsub(); e.dispose(); ref.engine = null; };
+    return () => { unsub(); removeEventListener('hashchange', onHash); e.dispose(); ref.engine = null; };
   }, []);
 
   // forma della scena: sfocata mentre si costruisce
@@ -200,6 +205,7 @@ export default function App() {
       }
       if (e.key === '+' || e.key === '=') { addLight('Pannello'); return; }
       if (e.key.toLowerCase() === 'f' && !mod) { eng()?.resetView(); return; }
+      if (!mod && (e.key === '1' || e.key === '2' || e.key === '3')) { quickView(e.key === '1' ? 'pianta' : e.key === '2' ? 'camera' : 'viso'); return; }
     };
     const up = (e: KeyboardEvent) => { if (e.code === 'Space') useStore.setState({ showOriginal: false }); };
     addEventListener('keydown', down);
@@ -304,7 +310,7 @@ export default function App() {
           {cam.falseColor ? (
             <div id="legend" className="glass chrome">{FC_LEGEND.map(([c, n]) => <span key={n}><i style={{ background: c }} />{n}</span>)}</div>
           ) : help && (
-            <div id="help" className="chrome">Trascina: guardati intorno · tasto destro o Alt: gira attorno<br />Rotella: avvicinati · Maiusc + trascina: spostati<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · F: vista iniziale</div>
+            <div id="help" className="chrome">Trascina: guardati intorno · tasto destro o Alt: gira attorno<br />Rotella: avvicinati · Maiusc + trascina: spostati<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · 1 2 3: pianta, camera, viso</div>
           )}
           <Roll />
           <SelectionCard />

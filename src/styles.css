@@ -95,6 +95,7 @@ input{font:inherit}
 .pop h3 .acts{display:flex;align-items:center;gap:6px;flex:none}
 .del{width:30px;height:30px;margin:-5px -7px -5px 0;border:0;border-radius:8px;background:none;color:var(--t2);display:grid;place-items:center;cursor:pointer;flex:none;transition:color .15s,background .15s}
 .del:hover{color:#FF6B5E;background:rgba(255,255,255,.06)}
+.del.eye{margin-right:0}.del.eye:hover{color:var(--t1)}
 .del svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .pop h3 span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row{margin-bottom:14px}

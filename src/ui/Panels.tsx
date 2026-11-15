@@ -11,6 +11,8 @@ import { FOCALS, SENSORS, ISO_VALUES, FSTOPS, SHUTTERS, ASPECTS, fmtShutter, fmt
 import { POSES, PoseId } from '../engine/mannequin';
 import { WEATHER, fmtHour, sunAngles, sunSky } from '../engine/sun';
 import { LIGHT_TYPES, addLight, addPerson, addProp, switchAB } from '../actions';
+import { shareLink } from '../project';
+import { quickView } from './views';
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
 import { autoExpose, updateRoom } from '../build';
@@ -140,6 +142,10 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
         <div className="k"><span>Formato</span></div>
         <div className="chips">{ASPECTS.map((m) => <button key={m.id} className={`chip ${cam.aspect === m.id ? 'on' : ''}`} onClick={() => set({ aspect: m.id })}>{m.name}</button>)}</div>
       </div>
+      <div className="row">
+        <div className="k"><span>Vista</span>{!TOUCH && <span style={{ color: 'var(--t3)' }}>tasti 1 2 3</span>}</div>
+        <div className="chips">{([['pianta', 'Pianta'], ['camera', 'Camera'], ['viso', 'Viso']] as const).map(([k, n]) => <button key={k} className="chip" onClick={() => { quickView(k); onClose(); }}>{n}</button>)}</div>
+      </div>
       <MoveRow onClose={onClose} />
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
@@ -186,6 +192,18 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
   const sun = useStore((s) => s.sun);
   const hasWindows = useStore((s) => (s.room ? s.room.openings.some((o) => o.kind !== 'porta') : !!s.recon?.windows.length));
   const built = useStore((s) => !!s.room);
+  const hasPeople = useStore((s) => s.people.length > 0);
+  // a che ora il sole arriva sul viso della persona scelta (o della prima)
+  const sunOnFace = () => {
+    const st = useStore.getState(), e = eng();
+    const id = st.selection?.type === 'person' ? st.selection.id : st.people[0]?.id;
+    if (!e || !id) return;
+    const P = st.people.find((p) => p.id === id)!;
+    const r = e.sunOnFace(id, { ...st.sun, enabled: true });
+    if (!r) { st.showToast(`In questo giorno il sole non arriva mai sul viso di ${P.name}. Prova un'altra stagione, gira la stanza (Da dove entra il sole) o avvicina la persona alla finestra.`); return; }
+    st.snapshot(); set({ hour: Math.round(r.best * 12) / 12, enabled: true });
+    st.showToast(r.to - r.from < 0.1 ? `Il sole arriva sul viso di ${P.name} solo verso le ${fmtHour(r.best)}.` : `Il sole è sul viso di ${P.name} dalle ${fmtHour(r.from)} alle ${fmtHour(r.to)}. Messo alle ${fmtHour(r.best)}.`);
+  };
   const svg = useRef<SVGSVGElement>(null);
   const set = (p: any) => useStore.setState({ sun: { ...useStore.getState().sun, ...p } });
   // alba e tramonto del giorno scelto
@@ -236,6 +254,7 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
           {([['Mattina', rise + 1.5], ['Mezzogiorno', (rise + setH) / 2], ['Tramonto', setH - 0.4], ['Ora blu', setH + 0.45], ['Notte', Math.min(23.5, setH + 3)]] as [string, number][]).map(([n, h]) => (
             <button key={n} className={`chip ${Math.abs(sun.hour - h) < 0.2 ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ hour: Math.round(h * 12) / 12, enabled: true }); }}>{n}</button>
           ))}
+          {hasWindows && hasPeople && <button className="chip" title="Trova a che ora il sole entra e arriva sul viso" onClick={sunOnFace}>Sole sul viso</button>}
         </div>
       </div>
       {built && hasWindows && <ShutterRow />}
@@ -278,6 +297,7 @@ export function PlaceMenu({ onClose, onNew, onSave, onOpen }: { onClose: () => v
       <button className="mi" onClick={() => { onNew(); onClose(); }}>Nuova stanza</button>
       <button className="mi" onClick={() => { onSave(); onClose(); }}>Salva progetto <small>Cmd S</small></button>
       <button className="mi" onClick={() => { onOpen(); onClose(); }}>Apri progetto</button>
+      <button className="mi" onClick={() => { shareLink(); onClose(); }}>{TOUCH ? 'Condividi link' : 'Copia link del progetto'}</button>
       <button className="mi" onClick={() => { eng()?.resetView(); onClose(); }}>Torna alla vista iniziale <small>F</small></button>
       {shots.length > 0 && <button className="mi" onClick={() => { useStore.setState({ viewer: shots[shots.length - 1].id }); onClose(); }}>Esporta l'ultimo scatto</button>}
     </Pop>

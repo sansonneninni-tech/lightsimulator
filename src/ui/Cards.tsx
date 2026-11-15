@@ -4,12 +4,12 @@ import { useStore } from '../store';
 import { eng } from '../engineRef';
 import Pop from './Pop';
 import { edgePoint } from './Handles';
-import { Svg, Del, TYPE_ICONS, POSE_ICONS } from './icons';
+import { Svg, Del, Eye, TYPE_ICONS, POSE_ICONS } from './icons';
 import {
   fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter,
 } from '../engine/photometry';
 import { POSES, SKINS, poseJoints, PoseId } from '../engine/mannequin';
-import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection, SCHEMES, applyScheme } from '../actions';
+import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection, SCHEMES, applyScheme, faceExposure, exposeFace } from '../actions';
 import { stopsLabel, luxAtTarget } from '../export/exports';
 import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
@@ -56,7 +56,7 @@ export function LightCard({ id }: { id: string }) {
         // finestra di una stanza costruita: spegnere vuol dire chiudere l'oscurante (vale anche nello scatto)
         if (win && L.windowId && st().room) { updateOpening(L.windowId, { closed: true }, true); useStore.setState({ selection: null }); st().showToast('Oscurante chiuso: da questa finestra non entra più luce. Toccala per riaprirla.'); return; }
         snap(); up({ on: !L.on });
-      }} />{!win && <Del title={L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'} onClick={removeSelection} />}</div></h3>
+      }} />{!win && <Eye title="Guarda da questa luce" onClick={() => { eng()?.viewFromLight(L); useStore.setState({ selection: null }); st().showToast(`Vista da ${L.name}: vedi cosa illumina. ${TOUCH ? 'Camera › Vista per tornare.' : 'F per tornare.'}`); }} />}{!win && <Del title={L.attached ? 'Rimuovi la lampada' : 'Rimuovi luce'} onClick={removeSelection} />}</div></h3>
       <div className="row">
         <div className="k"><span>Intensità</span><b className="num">{win ? (sun.enabled ? `cielo · ${stopsLabel(L.stops)}` : 'luce naturale spenta') : `${stopsLabel(L.stops)}${L.stops > 0.01 ? ' oltre il pieno' : L.stops < -0.01 ? ` · ${Math.max(1, Math.round(Math.pow(2, L.stops) * 100))}%` : ' · pieno'}`}</b></div>
         <input type="range" min={-8} max={win ? 2 : 3} step={1 / 3} value={L.stops} onPointerDown={snap} onChange={(e) => {
@@ -168,12 +168,20 @@ export function PersonCard({ id }: { id: string }) {
   const xy = useAnchor(P?.position, id);
   if (!P) return null;
   const fc = eng()?.faceContrast(id);
+  const ex = fc ? faceExposure(id) : null;
+  const cam = st().cam;
   const up = (p: any) => st().updatePerson(id, p);
   const snap = () => st().snapshot();
   return (
     <Pop x={xy.x} y={xy.y - 120} onClose={() => useStore.setState({ selection: null })}>
       <h3><span>{P.name}</span><Del title="Rimuovi persona" onClick={removeSelection} /></h3>
       <div className="line num"><span title="Rapporto tra il lato illuminato e il lato in ombra del viso">Contrasto</span><b>{fc ? contrastLabel(fc.ratio) : 'volto al buio'}</b></div>
+      {ex && (
+        <div className="line num"><span title="Luce sul lato illuminato del viso, rispetto al diaframma della camera">Esposizione</span>
+          {Math.abs(ex.stops) < 0.1 ? <b>giusta a f/{fmtStop(cam.fStop)}</b>
+            : <button className="chip on" title="Regola tutte le tue luci insieme, i rapporti restano" onClick={() => exposeFace(id)}>{ex.stops > 0 ? '+' : '−'}{Math.abs(ex.stops).toFixed(1).replace('.', ',')} stop · esponi a f/{fmtStop(cam.fStop)}</button>}
+        </div>
+      )}
       <div className="row" style={{ marginTop: 10 }}>
         <div className="k"><span>Schema luci</span></div>
         <div className="chips">{SCHEMES.map((q) => <button key={q.id} className="chip" onClick={() => applyScheme(id, q.id)}>{q.name}</button>)}</div>
