@@ -345,7 +345,6 @@ function ribbon(r: RoomSpec, X: number, step: number, edge: (x: number, side: 0 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(color, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
   // triangoli rivolti verso l'alto qualunque sia l'ordine dei due bordi
@@ -357,25 +356,28 @@ function ribbon(r: RoomSpec, X: number, step: number, edge: (x: number, side: 0 
   return g;
 }
 
-function shoreStrip(r: RoomSpec, h: (x: number, z: number) => number) {
-  // dalla linea dell'acqua verso terra: sabbia bagnata e scura, poi un bordo che sfuma nella sabbia asciutta
+// (niente colori per vertice: il path tracer li legge male, la battigia veniva nera)
+function shoreStrips(r: RoomSpec, h: (x: number, z: number) => number) {
+  // dalla linea dell'acqua verso terra: sabbia bagnata e scura, poi a gradini verso la sabbia asciutta
   const wet = (x: number) => 1.6 + 0.7 * Math.sin(x / 6.1) * Math.sin(x / 2.3 + 1) + 0.3 * Math.sin(x / 17);
   const y = (x: number, z: number) => Math.max(SEA_Y + 0.004, h(x, z) + 0.01);
-  const W: [number, number, number] = [0.55, 0.55, 0.58];
-  const core = ribbon(r, 260, 0.5, (x, side) => (side ? -0.05 : -wet(x)), y, () => W);
-  const fade = ribbon(r, 260, 0.5, (x, side) => (side ? -wet(x) : -(wet(x) + 0.9)), y, (x, side) => (side ? W : [1, 1, 1]));
-  return mergeGeometries([core, fade]);
+  const one = (c: [number, number, number]) => () => c;
+  return [
+    { k: 0.55, g: ribbon(r, 260, 0.5, (x, side) => (side ? -0.05 : -wet(x)), y, one([1, 1, 1])) },
+    { k: 0.7, g: ribbon(r, 260, 0.5, (x, side) => (side ? -wet(x) : -(wet(x) + 0.35)), y, one([1, 1, 1])) },
+    { k: 0.85, g: ribbon(r, 260, 0.5, (x, side) => (side ? -(wet(x) + 0.35) : -(wet(x) + 0.75)), y, one([1, 1, 1])) },
+  ];
 }
 
 function foamStrips(r: RoomSpec) {
   // schiuma appena posata sulla battigia (sottile, irregolare) e una linea rotta più al largo
   const n1 = (x: number) => 0.5 + 0.5 * Math.sin(x / 3.7) * Math.sin(x / 1.3 + 2) * Math.sin(x / 9.1);
   const y = (x: number, z: number) => Math.max(SEA_Y + 0.012, beachH(r, x, z) + 0.02);
-  const a = ribbon(r, 260, 0.35, (x, side) => (side ? -(0.05 + 0.1 * n1(x)) : 0.12 + 0.35 * n1(x + 11)), y,
-    (x, side) => { const v = side ? 0.88 : 0.5 + 0.2 * n1(x + 5); return [v, v * 1.01, v]; });
-  const b = ribbon(r, 260, 0.35, (x, side) => (side ? 1.6 + 0.6 * n1(x + 3) : 1.72 + 0.75 * n1(x + 7)), y,
-    () => [0.55, 0.56, 0.56], (x) => n1(x + 21) < 0.5);
-  return mergeGeometries([a, b]);
+  const c = () => [1, 1, 1] as [number, number, number];
+  return {
+    near: ribbon(r, 260, 0.35, (x, side) => (side ? -(0.05 + 0.1 * n1(x)) : 0.12 + 0.35 * n1(x + 11)), y, c),
+    far: ribbon(r, 260, 0.35, (x, side) => (side ? 1.6 + 0.6 * n1(x + 3) : 1.72 + 0.75 * n1(x + 7)), y, c, (x) => n1(x + 21) < 0.5),
+  };
 }
 
 export function buildOutdoor(r: RoomSpec): OutdoorBuild {
@@ -444,8 +446,13 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
       for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) / 12, -p.getZ(i) / 12);
       add(mesh(sea, water, 'mare', 0.05, { cast: false }));
       // battigia: sabbia bagnata (più scura, verso terra sfuma nella sabbia asciutta) e schiuma sull'acqua
-      add(mesh(shoreStrip(r, (x, z) => beachH(r, x, z)), new THREE.MeshStandardMaterial({ map: sandMat.map, vertexColors: true, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 'battigia', 0.3, { cast: false }));
-      add(mesh(foamStrips(r), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 'schiuma', 0.5, { cast: false }));
+      const po = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 };
+      for (const { k, g: sg } of shoreStrips(r, (x, z) => beachH(r, x, z))) {
+        add(mesh(sg, new THREE.MeshStandardMaterial({ map: sandMat.map, color: new THREE.Color(k, k, k * 1.04), roughness: 0.85, ...po }), 'battigia', 0.4 * k, { cast: false }));
+      }
+      const fo = foamStrips(r);
+      add(mesh(fo.near, new THREE.MeshStandardMaterial({ color: new THREE.Color(0.82, 0.84, 0.83), roughness: 0.9, ...po }), 'schiuma', 0.6, { cast: false }));
+      add(mesh(fo.far, new THREE.MeshStandardMaterial({ color: new THREE.Color(0.5, 0.53, 0.53), roughness: 0.9, ...po }), 'schiuma', 0.4, { cast: false }));
       // scogli a un lato e un promontorio lontano
       const rr = rng(9);
       const rockMat = new THREE.MeshStandardMaterial({ map: rockTex(), color: new THREE.Color('#a4a39e'), roughness: 0.85 });

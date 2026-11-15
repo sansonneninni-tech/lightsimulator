@@ -1403,9 +1403,12 @@ export class Engine {
     // con una persona in quadro si espone per il volto (cartoncino grigio dal lato della chiave)
     const face = this.built ? this.faceLux() : 0;
     // esterni di notte: si espone per una notte (volto 1,5 stop sotto il grigio medio, il buio resta buio)
-    const under = this.outdoor ? Math.pow(2, -1.5 * this.nightFactor(this.snapshot.sun)) : 1;
-    if (face > 0.5) return this.settingsFor(under * 1.3 * Math.PI / face);
-    return this.settingsFor(under * 0.2 / M);
+    // (senza volto in quadro: 2,5 stop sotto la media, che di notte è fatta di lampioni e vetrine)
+    const night = this.outdoor ? this.nightFactor(this.snapshot.sun) : 0;
+    const eMean = Math.pow(2, -2.5 * night) * 0.2 / M;
+    // di notte il volto non deve far bruciare lampioni e vetrine: mai più chiaro della media
+    if (face > 0.5) return this.settingsFor(night > 0.5 ? Math.min(eMean, Math.pow(2, -1.5 * night) * 1.3 * Math.PI / face) : Math.pow(2, -1.5 * night) * 1.3 * Math.PI / face);
+    return this.settingsFor(eMean);
   }
 
   settingsFor(e: number) {
