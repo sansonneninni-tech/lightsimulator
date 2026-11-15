@@ -50,6 +50,8 @@ for name, label, cat, o in ITEMS:
         # (x, z facoltativi: spostamento dal centro dell'ingombro, in metri, per lanterne a sbalzo)
         y = round(-h + frac * h, 3) if o.get('ceil') else round(frac * h, 3)
         e['light'] = {'offset': [round(dx * s, 3), y, round(dz * s, 3)], 'fixture': fx, 'kelvin': k, 'name': label}
+        if o.get('stops'):
+            e['light']['stops'] = o['stops']  # più luce della lampadina di base (es. lampione stradale)
     rows.append(e)
 
 ts = ['// Generato da tools/catalog/build.py: arredi a modello 3D (CC0, vedi public/catalog/LICENSE.txt)',

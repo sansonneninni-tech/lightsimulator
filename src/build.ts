@@ -155,7 +155,7 @@ export function syncRoomLights(room: RoomSpec, furniture: FurnitureState[], ligh
     if (!k.light || out.some((L) => L.attached === f.id)) continue;
     const p = lampWorld(f, room.height)!;
     const n = out.filter((L) => L.attached && L.name.startsWith(k.light!.name)).length;
-    out.push(makeLight(k.light.fixture, p, [p[0], p[1] - 1, p[2]], { name: n ? `${k.light.name} ${n + 1}` : k.light.name, kelvin: k.light.kelvin, softness: 0.5, attached: f.id }));
+    out.push(makeLight(k.light.fixture, p, [p[0], p[1] - 1, p[2]], { name: n ? `${k.light.name} ${n + 1}` : k.light.name, kelvin: k.light.kelvin, stops: k.light.stops || 0, softness: 0.5, attached: f.id }));
   }
   // numera le finestre
   const ws = out.filter((L) => L.origin === 'finestra');

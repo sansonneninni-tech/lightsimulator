@@ -17,4 +17,8 @@ Tutti i modelli sono in pubblico dominio (CC0 1.0). Nessun modello CC-BY o di li
   cono stradale, bicicletta, palma, cactus a candelabro, cactus a barile): tools/catalog/proc.html, CC0 1.0.
 
 I file sono stati ottimizzati (meshopt, texture webp 1024 px) e rinominati.
+Modifiche ai materiali: nella rete metallica e nel cancello in rete la trasparenza della maglia è
+ricavata dalla luminosità della texture (la copia trovata era un JPEG senza canale alfa); i vetri
+di doccia, lampioni, lanterne, cornice, registratore di cassa, cinepresa, bollitore e telecamera
+sono diventati vetro trasparente semplice per lo stesso motivo.
 https://creativecommons.org/publicdomain/zero/1.0/

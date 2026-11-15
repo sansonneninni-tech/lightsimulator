@@ -21,7 +21,7 @@ export interface FurnitureKind {
   size: [number, number]; // ingombro a terra (x, z)
   height: number;
   finishes: string[];     // la prima è quella di partenza
-  light?: { offset: [number, number, number]; fixture: string; kelvin: number; name: string };
+  light?: { offset: [number, number, number]; fixture: string; kelvin: number; name: string; stops?: number }; // stops: più forte della lampadina di base (lampione)
   onTop?: boolean;        // si appoggia sui mobili sotto (lampada da tavolo)
   ceiling?: boolean;      // appeso al soffitto
   surface?: number;       // altezza del piano d'appoggio
@@ -514,6 +514,8 @@ export function lampWorld(f: FurnitureState, ceilingY: number): [number, number,
   const k = furnitureKind(f.kind);
   if (!k.light) return null;
   const o = new THREE.Vector3(...k.light.offset).applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(f.rotationY));
-  const y = k.ceiling ? ceilingY + k.light.offset[1] : f.position[1] + k.light.offset[1];
+  let y = k.ceiling ? ceilingY + k.light.offset[1] : f.position[1] + k.light.offset[1];
+  // un lampione in una stanza bassa buca il soffitto: la luce resta appena sotto, così illumina ancora
+  if (!k.ceiling && y > ceilingY - 0.1) y = Math.max(f.position[1] + 0.1, ceilingY - 0.1);
   return [f.position[0] + o.x, y, f.position[2] + o.z];
 }
