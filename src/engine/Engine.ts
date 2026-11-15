@@ -17,6 +17,7 @@ import { FurnitureState, buildFurniture, furnitureReady, onFurnitureLoaded } fro
 import { denoise } from './denoise';
 import { Rigs } from './rigs';
 import { loadFigure, poseFigure, figureModel } from './figure';
+import { SKIN_MARK } from './human';
 
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
@@ -1940,7 +1941,24 @@ export class Engine {
       const fs2 = fs.replace('directLightContribution( - ray.direction, surf, state, hitPoint )',
         'directLightContribution( - ray.direction, surf, state, isBelowSurface && surf.transmission == 0.0 ? stepRayOrigin( ray.origin, ray.direction, surf.faceNormal, surfaceHit.dist ) : hitPoint )');
       if (fs2 === fs) console.warn('patch luce diretta non applicata');
-      ptm.fragmentShader = fs2; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
+      // pelle (segnata con SKIN_MARK in attenuationDistance, che sui materiali opachi non serve): la luce entra
+      // sotto la superficie e riesce poco più in là, il rosso più lontano del blu. Il passaggio tra luce e ombra
+      // diventa più morbido e caldo, come sulla pelle vera; l'energia totale resta la stessa
+      // (l'integrale di cos^p * (p+1)/2 sull'emisfero vale quanto quello del coseno).
+      const fs3 = fs2.replace('color = ( 1.0 - F ) * transFactor * metalFactor * wi.z * surf.color * ( retro + lambert ) / PI;',
+        `vec3 cosw = vec3( wi.z );
+        if ( surf.attenuationDistance > ${SKIN_MARK * 0.5} && surf.attenuationDistance < ${SKIN_MARK * 2} ) {
+          vec3 sp = vec3( 0.72, 0.88, 0.94 );
+          cosw = pow( vec3( max( wi.z, 1e-4 ) ), sp ) * ( sp + 1.0 ) * 0.5;
+        }
+        color = ( 1.0 - F ) * transFactor * metalFactor * cosw * surf.color * ( retro + lambert ) / PI;`);
+      if (fs3 === fs2) console.warn('patch pelle non applicata');
+      // un campione rovinato (NaN o infinito, raro ma possibile) restava nel pixel per sempre e il filtro
+      // del rumore lo allargava in un riquadro nero: lo si scarta
+      const fs4 = fs3.replace('gl_FragColor.a *= opacity;',
+        'if ( any( isnan( gl_FragColor ) ) || any( isinf( gl_FragColor ) ) ) gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );\n\t\t\t\t\tgl_FragColor.a *= opacity;');
+      if (fs4 === fs3) console.warn('patch campioni rovinati non applicata');
+      ptm.fragmentShader = fs4; ptm.needsUpdate = true; ptm.userData.mattePatched = true;
     }
     // leggero per la scheda video: al massimo ~0,9 megapixel calcolati (il resto lo fa il filtro
     // del rumore e l'ingrandimento), a pezzetti piccoli così il computer resta reattivo
@@ -2283,6 +2301,7 @@ function linToSrgb8(v: number) {
 
 // toglie i puntini isolati (fireflies) rimasti dal path tracing, sul buffer lineare
 function defirefly(buf: Float32Array, W: number, H: number) {
+  for (let i = 0; i < buf.length; i++) if (!Number.isFinite(buf[i])) buf[i] = 0; // campioni rovinati
   const lum = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) lum[i] = 0.2126 * buf[i * 4] + 0.7152 * buf[i * 4 + 1] + 0.0722 * buf[i * 4 + 2];
   const nb = new Float32Array(8);

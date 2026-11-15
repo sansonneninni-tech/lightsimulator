@@ -9,14 +9,22 @@ precision highp float;
 uniform sampler2D tPT; uniform sampler2D tAlb; uniform sampler2D tDist; uniform vec2 texel;
 varying vec2 vUv;
 float lum(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+bool bad(vec3 c){ return any(isnan(c)) || any(isinf(c)) || any(notEqual(c, c)); }
 vec3 irr(vec2 uv){
   vec3 a = texture2D(tAlb, uv).rgb;
-  return texture2D(tPT, uv).rgb / max(a, vec3(0.03));
+  vec3 c = texture2D(tPT, uv).rgb / max(a, vec3(0.03));
+  return bad(c) ? vec3(0.0) : c;
 }
 void main(){
   float d = texture2D(tDist, vUv).r;
   vec3 c = irr(vUv);
-  if (d > 500.0) { gl_FragColor = vec4(texture2D(tPT, vUv).rgb, 0.0); return; }
+  // pixel rovinato (NaN): prende la media dei vicini invece di diventare un buco nero che il filtro allarga
+  if (bad(texture2D(tPT, vUv).rgb)) {
+    vec3 s = vec3(0.0);
+    for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += irr(vUv + vec2(float(i), float(j)) * texel);
+    c = s / 8.0;
+  }
+  if (d > 500.0) { gl_FragColor = vec4(c, 0.0); return; }
   // varianza locale della luminanza (3x3) e taglio dei puntini isolati
   float m = 0.0, m2 = 0.0, mx = 0.0;
   for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {

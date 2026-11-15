@@ -8,6 +8,7 @@ import {
   illuminanceAt, SENSORS, fmtShutter, fmtStop, ASPECTS,
 } from '../engine/photometry';
 import { POSES } from '../engine/mannequin';
+import { defaultLook, WHOLE_SUITS } from '../engine/human';
 import { sunSky, fmtHour, WEATHER } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
 
@@ -218,11 +219,30 @@ export function kitSummary(scene: SceneSnapshot) {
   return { items: [...map.entries()], filters: [...gels.entries()], watts };
 }
 
+// set chiuso: chi è nudo o in intimo (per avvisare la troupe e ridurre le persone sul set)
+export function closedSetLine(scene: SceneSnapshot) {
+  const nudo: string[] = [], intimo: string[] = [];
+  for (const p of scene.people || []) {
+    const lk = { ...defaultLook(p.figure || 'uomo', p.skin), ...(p.look || {}) };
+    const top = lk.top ?? lk.outfit ?? '', bot = lk.bottom ?? lk.outfit ?? '';
+    const noTop = !top, noBot = !bot && !WHOLE_SUITS.includes(top);
+    if (!noTop && !noBot) continue;
+    if (noBot && !lk.under) nudo.push(`${p.name} (nudo integrale)`);
+    else if (noTop && !lk.under && p.figure === 'donna') nudo.push(`${p.name} (seno nudo)`);
+    else if (lk.under && (noBot || p.figure === 'donna')) intimo.push(p.name);
+  }
+  const out: string[] = [];
+  if (nudo.length) out.push(`Set chiuso, nudo: ${nudo.join(', ')}`);
+  if (intimo.length) out.push(`${nudo.length ? 'In' : 'Set chiuso, in'} intimo: ${intimo.join(', ')}`);
+  return out.join('. ');
+}
+
 export function kitCSV(scene: SceneSnapshot) {
   const rows = kitRows(scene);
   const head = ['N.', 'Nome', 'Apparecchio', 'Uscita', 'Colore', 'Accessori', 'Posizione', 'Sul soggetto'];
   const q = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
-  return [head.map(q).join(';'), ...rows.map((r) => [r.n, r.name, r.fixture, r.output, r.color, r.accessories, r.position, r.lux].map((x) => q(String(x))).join(';'))].join('\n');
+  const cs = closedSetLine(scene);
+  return [head.map(q).join(';'), ...rows.map((r) => [r.n, r.name, r.fixture, r.output, r.color, r.accessories, r.position, r.lux].map((x) => q(String(x))).join(';')), ...(cs ? ['', q(cs)] : [])].join('\n');
 }
 
 export function cameraLine(scene: SceneSnapshot) {
@@ -260,6 +280,7 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   doc.addImage(opts.imageUrl, 'JPEG', (PW - iw) / 2, M + 16, iw, ih);
   doc.setFontSize(10); doc.setTextColor(40);
   doc.text(pdfText(`Camera: ${cameraLine(scene)}     Luce naturale: ${sunLine(scene)}`), M, PH - M);
+  if (closedSetLine(scene)) { doc.setFont('helvetica', 'bold'); doc.text(pdfText(closedSetLine(scene)), M, PH - M - 6); doc.setFont('helvetica', 'normal'); }
   // movimento di camera: tutti i fotogrammi in fila
   if (opts.frames && opts.frames.length > 1 && opts.plan.move) {
     doc.addPage();
@@ -313,6 +334,8 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   if (sum.filters.length) { doc.text(pdfText(`Filtri e diffusioni: ${sum.filters.map(([n, q]) => `${q} × ${n}`).join(', ')}`), M, y); y += 5; }
   if (sum.watts) { doc.text(pdfText(`Potenza totale apparecchi aggiunti: ${sum.watts.toLocaleString('it-IT')} W (circa ${Math.ceil(sum.watts / 230)} A a 230 V)`), M, y); y += 5; }
   doc.text(pdfText(`Camera: ${cameraLine(scene)}`), M, y + 3);
+  const cs = closedSetLine(scene);
+  if (cs) { doc.setFont('helvetica', 'bold'); doc.text(pdfText(cs), M, y + 9); doc.setFont('helvetica', 'normal'); }
   return doc;
 }
 

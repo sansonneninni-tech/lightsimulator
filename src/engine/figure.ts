@@ -57,7 +57,7 @@ function prepare(scene: THREE.Object3D, map: Record<string, string>): Template {
 export const prepareHuman = (g: THREE.Object3D) => prepare(g, HUMAN_MAP);
 
 type P = { figure?: 'uomo' | 'donna'; skin: string; look?: Look };
-const lookOf = (p: P) => p.look || defaultLook(p.figure || 'uomo', p.skin);
+const lookOf = (p: P) => ({ ...defaultLook(p.figure || 'uomo', p.skin), ...(p.look || {}) }); // i progetti vecchi possono non avere i campi nuovi
 export const figureModel = (p: P) => JSON.stringify([p.figure || 'uomo', p.skin, lookOf(p)]);
 
 export function loadFigure(model: string): Promise<Template | null> {

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { useStore, Shot } from '../store';
 import { eng } from '../engineRef';
 import { roomBounds, windowInfos } from '../engine/room';
-import { planSVG, svgToCanvas, kitRows, kitSummary, kitCSV, buildPDF, download, slug, cameraLine, sunLine, PlanInput } from '../export/exports';
+import { planSVG, svgToCanvas, kitRows, kitSummary, kitCSV, closedSetLine, buildPDF, download, slug, cameraLine, sunLine, PlanInput } from '../export/exports';
 
 export function Roll() {
   const shots = useStore((s) => s.shots);
@@ -78,6 +78,7 @@ export function Viewer() {
               <b>Da portare:</b> {sum.items.length ? sum.items.map(([n, q]) => `${q} × ${n}`).join(', ') : 'solo le luci già presenti sul luogo'}
               {sum.filters.length > 0 && <><br /><b>Filtri e diffusioni:</b> {sum.filters.map(([n, q]) => `${q} × ${n}`).join(', ')}</>}
               {sum.watts > 0 && <><br /><b>Potenza:</b> {sum.watts.toLocaleString('it-IT')} W, circa {Math.ceil(sum.watts / 230)} A a 230 V</>}
+              {closedSetLine(shot.scene) && <><br /><b>{closedSetLine(shot.scene)}</b></>}
             </div>
           </div>
         )}

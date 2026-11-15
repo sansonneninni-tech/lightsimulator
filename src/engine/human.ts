@@ -208,6 +208,8 @@ function smoothNormals(pos: Float32Array, rv: ArrayLike<number>, idx: ArrayLike<
   return out;
 }
 
+/** segno per il path tracer: questo materiale è pelle (vedi la patch dello shader in Engine.initPT) */
+export const SKIN_MARK = 1e30;
 const MAT = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0, ...o });
 
 export type HumanTemplate = { scene: THREE.Group; hipsH: number; rest: Map<string, THREE.Quaternion>; map: Record<string, string>; arms: [string, string, string][] };
@@ -440,6 +442,7 @@ export async function buildHuman(look: Look, gender: 'uomo' | 'donna', skin: str
     const mat = MAT({ roughness: 0.52, color: new THREE.Color().setScalar(L >= 0 ? 1 : 1 + L * 0.5) });
     if (L > 0) mat.color.setRGB(1 + L * 0.35, 1 + L * 0.33, 1 + L * 0.3);
     mat.map = await loadTex(skinFile);
+    (mat as any).attenuationDistance = SKIN_MARK;
     skinned(geo, mat, 'pelle');
   }
 
