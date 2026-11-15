@@ -1,0 +1,11 @@
+Arredi a modello 3D del catalogo (public/catalog/*.glb) e relative miniature (th/).
+
+Tutti i modelli sono rilasciati in pubblico dominio (CC0 1.0):
+- Poly Haven (https://polyhaven.com/models), CC0 1.0.
+- Modelli originali del progetto PlanScape-AI (CC0, vedi il suo CREDITS.md).
+- Altri modelli CC0 raccolti dai repository ezEngine/store-sample, TheMarco/liminal,
+  AndreTInfante/portalgi, Neopallium/bevy_fake_interior, ghantapavan93/Utility-Connect---Move-Relay
+  (tutti con licenza CC0 dichiarata per gli asset).
+
+I file sono stati ottimizzati (meshopt, texture webp 1024 px) e rinominati.
+https://creativecommons.org/publicdomain/zero/1.0/
