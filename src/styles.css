@@ -271,7 +271,7 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 #creator .cr-stage{flex:1;position:relative;min-width:0;cursor:grab}
 #creator .cr-stage canvas{display:block}
 #creator .cr-top{position:absolute;left:16px;top:16px;display:flex;gap:8px;z-index:2}
-#creator .seg{display:flex;background:rgba(255,255,255,.07);border-radius:10px;padding:3px;gap:2px}
+#creator .seg{display:flex;background:rgba(28,28,30,.82);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-radius:10px;padding:3px;gap:2px}
 #creator .seg button{border:0;background:none;color:var(--t2);font:500 12px/1 inherit;padding:8px 12px;border-radius:8px;cursor:pointer}
 #creator .seg button.on{background:rgba(255,255,255,.9);color:#0A0A0B}
 #creator .cr-busy{position:absolute;right:18px;top:16px;color:var(--t3);font-size:18px;letter-spacing:2px}
