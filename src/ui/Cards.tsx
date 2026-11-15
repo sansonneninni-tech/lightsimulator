@@ -15,6 +15,7 @@ import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
 import { FurnitureCard, OpeningCard } from './Room';
 import { updateOpening } from '../build';
+import { TOUCH } from './touch';
 
 const MAIN_GELS = ['none', 'cto-quarter', 'cto-half', 'cto-full', 'ctb-half', 'ctb-full', 'plus-green', 'minus-green'];
 
@@ -143,7 +144,7 @@ export function LightCard({ id }: { id: string }) {
             </div>
           )}
           {(win || L.attached) && <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>}
-          <div className="hint">Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin.</div>
+          <div className="hint">{TOUCH ? "Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (il cursore Altezza la alza). Il mirino la punta, l'anello in verticale è il dimmer." : "Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin."}</div>
         </div>
       )}
     </Pop>
@@ -198,7 +199,7 @@ export function PersonCard({ id }: { id: string }) {
         <input type="range" min={0} max={359} step={1} value={((P.rotationY % 360) + 360) % 360} onPointerDown={snap} onChange={(e) => up({ rotationY: +e.target.value })} />
       </div>
       <div className="line"><span>Manichino</span><div className={`toggle ${manikin === id ? 'on' : ''}`} onClick={() => useStore.setState({ manikin: manikin === id ? null : id })} /></div>
-      <div className="hint">Trascina l'anello a terra per spostarla, rotella per girarla. Doppio clic sull'anello per muovere le articolazioni.</div>
+      <div className="hint">{TOUCH ? "Trascina l'anello a terra per spostarla. Con Manichino acceso muovi le articolazioni." : "Trascina l'anello a terra per spostarla, rotella per girarla. Doppio clic sull'anello per muovere le articolazioni."}</div>
     </Pop>
   );
 }

@@ -9,6 +9,7 @@ import { TEMPLATES, Template, createRoom, updateRoom, addOpening, updateOpening,
 import { ALL_FURNITURE, CATEGORIES, FINISHES, furnitureKind } from '../engine/furniture';
 import { WALL_FINISHES, FLOORS, OPENING_KINDS, WALLS, RoomSpec } from '../engine/room';
 import { stopsLabel } from '../export/exports';
+import { TOUCH } from './touch';
 
 const fmtM = (v: number) => `${v.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 2 })} m`;
 
@@ -182,7 +183,7 @@ export function FurnitureCard({ id }: { id: string }) {
           <button className="btn" onClick={() => useStore.setState({ selection: { type: 'light', id: light.id } })}>Regola la luce</button>
         </div>
       )}
-      <div className="hint">{k.wall != null ? 'Trascinalo per spostarlo lungo le pareti.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
+      <div className="hint">{k.wall != null ? 'Trascinalo per spostarlo lungo le pareti.' : TOUCH ? 'Trascinalo per spostarlo.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
       <div className="hr" />
       <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
     </Pop>

@@ -128,7 +128,9 @@ export default function Creator() {
     const st = three.current;
     if (!st) return;
     const s = height / 1.75;
-    if (frame === 'volto') { st.target.set(0, 1.6 * s, 0); st.dist = 1.15; } else { st.target.set(0, 0.92 * s, 0); st.dist = 4.6 * s; }
+    // telefono: la scena è bassa e in alto ci sono i comandi, quindi la figura si allontana e scende un poco
+    const low = st.r.domElement.clientHeight < 460 ? 1 : 0;
+    if (frame === 'volto') { st.target.set(0, (1.6 + 0.03 * low) * s, 0); st.dist = 1.15 * (1 + 0.2 * low); } else { st.target.set(0, (0.92 + 0.12 * low) * s, 0); st.dist = 4.6 * s * (1 + 0.25 * low); }
     st.dirty = true;
   }, [frame, height, id]);
 

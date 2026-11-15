@@ -14,6 +14,7 @@ import { LIGHT_TYPES, addLight, addPerson, addProp, switchAB } from '../actions'
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
 import { autoExpose, updateRoom } from '../build';
+import { TOUCH } from './touch';
 
 const FOCUS_VALUES = [0, 0.5, 0.7, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 1000];
 const fmtFocus = (v: number) => (!v ? 'fuoco auto' : v >= 1000 ? 'fuoco ∞' : `fuoco ${v.toLocaleString('it-IT')} m`);
@@ -78,7 +79,7 @@ export function PeoplePanel({ onClose }: { onClose: () => void }) {
       <div className="poses">
         {POSES.map((p) => <button key={p.id} className="pose" onClick={() => { addPerson(p.id as PoseId); onClose(); }}><Svg d={POSE_ICONS[p.id]} vb="0 0 28 36" />{p.name}</button>)}
       </div>
-      <div className="hint">Doppio clic sull'anello di una persona per muovere le articolazioni.</div>
+      <div className="hint">{TOUCH ? 'Tocca una persona e accendi Manichino per muovere le articolazioni.' : "Doppio clic sull'anello di una persona per muovere le articolazioni."}</div>
     </Pop>
   );
 }
@@ -144,7 +145,7 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
         <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
         <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e && hasPhoto) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>{hasPhoto ? "Torna all'inquadratura della foto" : 'Torna alla vista iniziale'}</button>
       </div>
-      <div className="hint">Muoviti nella stanza: trascina per guardare, rotella o pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), W A S D per camminare, Q E per scendere e salire, tasto destro o due dita per spostarti di lato.</div>
+      <div className="hint">{TOUCH ? 'Muoviti nella stanza: un dito per guardare, pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), due dita per spostarti di lato.' : 'Muoviti nella stanza: trascina per guardare, rotella o pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), W A S D per camminare, Q E per scendere e salire, tasto destro o due dita per spostarti di lato.'}</div>
     </Pop>
   );
 }

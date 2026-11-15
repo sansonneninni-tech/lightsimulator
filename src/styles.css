@@ -36,6 +36,7 @@ input{font:inherit}
 /* corners */
 #place{position:fixed;top:20px;left:20px;color:var(--t2);font-weight:500;padding:8px 12px;border-radius:10px;z-index:5;max-width:40vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #place:hover,#place.on{color:var(--t1);background:rgba(255,255,255,.05)}
+@media (hover:none) and (pointer:coarse){#place::after{content:"";display:inline-block;width:6px;height:6px;margin:0 2px 3px 8px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);opacity:.8}}
 #sky{position:fixed;top:20px;right:20px;color:var(--t2);font-weight:500;padding:8px 12px;border-radius:10px;z-index:5}
 #sky:hover,#sky.on{color:var(--t1);background:rgba(255,255,255,.05)}
 
@@ -177,8 +178,12 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 #legend span{display:flex;flex-direction:column;align-items:center;gap:4px}
 #legend i{display:inline-block;width:18px;height:10px;border-radius:2px}
 #help{position:fixed;left:24px;bottom:24px;color:var(--t2);text-shadow:0 1px 6px rgba(0,0,0,.8);font-size:11px;line-height:1.7;z-index:5;pointer-events:none}
-@media (max-width:760px){#help{display:none}.dbtn span.t{display:none}#roll{display:none}}
-@media (hover:none) and (pointer:coarse){#help{display:none}}
+@media (max-width:760px){#help{display:none}.dbtn span.t{display:none}
+  /* telefono: il rullino sta in alto a destra, sotto l'ora (in basso c'è la barra) */
+  #roll{top:calc(env(safe-area-inset-top,0px) + 58px);bottom:auto;right:12px;max-width:62vw}
+  #roll img{width:56px;height:38px}
+  body.sheet-open #roll{display:none}}
+@media (hover:none) and (pointer:coarse){#help{display:none}.mi small{display:none}}
 .edge{position:absolute;left:0;top:0;width:28px;height:28px;margin:-14px 0 0 -14px;pointer-events:auto;cursor:pointer;transition:opacity .3s}
 .edge b{position:absolute;left:9px;top:9px;width:10px;height:10px;border-radius:50%;background:currentColor;box-shadow:0 0 10px 1px currentColor}
 .edge i{position:absolute;inset:0}
