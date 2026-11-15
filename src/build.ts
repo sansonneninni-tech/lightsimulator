@@ -203,7 +203,7 @@ export function clampFurniture(f: FurnitureState, room: RoomSpec, all: Furniture
     const d = [pz - b.min[2], b.max[2] - pz, px - b.min[0], b.max[0] - px];
     // in città si appende sulle facciate ai lati della strada
     const i = room.outdoor ? (px < 0 ? 2 : 3) : d.indexOf(Math.min(...d));
-    const half = kw.size[0] / 2, t = kw.size[1] / 2 + 0.004;
+    const half = kw.size[0] / 2, t = kw.size[1] / 2 + 0.004 + (room.outdoor ? 0.04 : 0); // in città: davanti alle vetrine
     const along = (v: number, lo: number, hi: number) => (hi - lo < kw.size[0] ? (lo + hi) / 2 : Math.min(hi - half - 0.02, Math.max(lo + half + 0.02, v)));
     const y = Math.max(0.05, Math.min(room.height - kw.height - 0.02, f.position[1] > 0 ? f.position[1] : kw.wall));
     // mai sopra finestre e porte: si sposta di lato, verso il bordo libero più vicino

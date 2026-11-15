@@ -410,11 +410,11 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
     const fac = facadeTex(), facR = facadeRough(), facE = facadeLit();
     const mats = COLORS.map((c) => {
       const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(c), map: fac, roughnessMap: facR, roughness: 1, emissiveMap: facE, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 });
-      nightMats.push({ m, nits: 22 });
+      nightMats.push({ m, nits: 7 });
       return m;
     });
     const shopM = new THREE.MeshStandardMaterial({ map: shopTex(), roughnessMap: shopRough(), roughness: 1, emissiveMap: shopLit(), emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 });
-    nightMats.push({ m: shopM, nits: 30 });
+    nightMats.push({ m: shopM, nits: 10 });
     const stone = new THREE.MeshStandardMaterial({ color: new THREE.Color('#d8d2c6'), roughness: 0.75 });
     const parts: THREE.BufferGeometry[][] = COLORS.map(() => []);
     const shops: THREE.BufferGeometry[] = [], corn: THREE.BufferGeometry[] = [];
@@ -430,7 +430,7 @@ export function buildOutdoor(r: RoomSpec): OutdoorBuild {
         const ci = Math.floor(rr() * COLORS.length);
         parts[ci].push(withUV(box(xa, xb, -0.2, H, z, z + w), 4 * BAY));
         const fx = s < 0 ? -facade : facade;
-        shops.push(withUV(box(s < 0 ? fx - 0.1 : fx - 0.08, s < 0 ? fx + 0.08 : fx + 0.1, 0, 4.2, z + 0.15, z + w - 0.15), 6.4));
+        shops.push(withUV(box(s < 0 ? fx - 0.1 : fx - 0.03, s < 0 ? fx + 0.03 : fx + 0.1, 0, 4.2, z + 0.15, z + w - 0.15), 6.4));
         corn.push(box(s < 0 ? fx - 0.5 : fx - 0.35, s < 0 ? fx + 0.35 : fx + 0.5, H - 0.4, H, z, z + w));
         corn.push(box(s < 0 ? fx - 0.3 : fx - 0.18, s < 0 ? fx + 0.18 : fx + 0.3, 4.2, 4.45, z, z + w));
         z += w;

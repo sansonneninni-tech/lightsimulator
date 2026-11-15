@@ -202,7 +202,7 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
     if (!e || !id) return;
     const P = st.people.find((p) => p.id === id)!;
     const r = e.sunOnFace(id, { ...st.sun, enabled: true });
-    if (!r) { st.showToast(`In questo giorno il sole non arriva mai sul viso di ${P.name}. ${outdoor ? 'Prova un\'altra stagione, gira il set (Da dove arriva il sole) o sposta la persona fuori dall\'ombra.' : 'Prova un\'altra stagione, gira la stanza (Da dove entra il sole) o avvicina la persona alla finestra.'}`); return; }
+    if (!r) { st.showToast(`In questo giorno il sole non arriva mai sul viso di ${P.name}. ${outdoor ? 'Gira la persona verso il sole, prova un\'altra stagione o ruota il set (Da dove arriva il sole).' : 'Prova un\'altra stagione, gira la stanza (Da dove entra il sole) o avvicina la persona alla finestra.'}`); return; }
     st.snapshot(); set({ hour: Math.round(r.best * 12) / 12, enabled: true });
     st.showToast(r.to - r.from < 0.1 ? `Il sole arriva sul viso di ${P.name} solo verso le ${fmtHour(r.best)}.` : `Il sole è sul viso di ${P.name} dalle ${fmtHour(r.from)} alle ${fmtHour(r.to)}. Messo alle ${fmtHour(r.best)}.`);
   };

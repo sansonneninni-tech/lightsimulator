@@ -87,6 +87,7 @@ export class Rigs {
   private sel: string | null = null;
   private last: LightState[] = [];
   floorY = 0;
+  groundAt: ((x: number, z: number) => number) | null = null; // esterni: terreno non piano (strada, dune)
 
   constructor() { this.group.name = 'rigs'; }
 
@@ -117,17 +118,18 @@ export class Rigs {
       const m = Math.max(c.r, c.g, c.b) || 1;
       if (L.on) r.lensMat.color.setRGB(c.r / m, c.g / m, c.b / m); else r.lensMat.color.setRGB(0.18, 0.18, 0.2);
       // stativo: da terra fin sotto la testa
+      const floorY = this.groundAt ? this.groundAt(P.x, P.z) : this.floorY;
       const top = P.y - (fx.kind === 'spot' ? 0.0 : fx.kind === 'area' ? Math.min(0.3, L.size[1] / 2) : 0.05);
-      const bottom = this.floorY + 0.45;
-      const showStand = top > this.floorY + 0.2;
+      const bottom = floorY + 0.45;
+      const showStand = top > floorY + 0.2;
       r.stand.visible = r.legs.visible = showStand;
       if (showStand) {
         const h = Math.max(0.01, top - bottom);
         r.stand.scale.y = h; r.stand.position.set(P.x, bottom + h / 2, P.z);
-        r.legs.position.set(P.x, this.floorY, P.z);
-        r.legs.scale.y = Math.min(1, (top - this.floorY) / 0.45);
+        r.legs.position.set(P.x, floorY, P.z);
+        r.legs.scale.y = Math.min(1, (top - floorY) / 0.45);
       }
-      r.ring.position.set(P.x, this.floorY + 0.004, P.z);
+      r.ring.position.set(P.x, floorY + 0.004, P.z);
       r.ringMat.color.copy(r.lensMat.color);
       r.ringMat.opacity = sel ? 0.9 : 0.45;
       if (r.beam && r.beamMat) {

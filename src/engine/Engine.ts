@@ -1000,7 +1000,7 @@ export class Engine {
     this.sceneryLights = this.sceneryLightsFor(sun);
     const lights = [...this.resolveLights(rawLights), ...this.sceneryLights];
     this.rigs.group.visible = !!this.built;
-    if (this.built) { this.rigs.floorY = this.bounds.min[1]; this.rigs.sync(rawLights); }
+    if (this.built) { const b = this.built; this.rigs.floorY = this.bounds.min[1]; this.rigs.groundAt = b.outdoor ? (x, z) => terrainHeight(b, x, z) : null; this.rigs.sync(rawLights); }
     this.glowFrames(lights);
     const skyLux = sun.enabled ? sunSky(sun).skyLux : 0;
     const skyK = sunSky(sun).skyK;
@@ -2118,6 +2118,9 @@ export class Engine {
     this.scene.environmentIntensity = 1;
     // il riflesso del cielo sul mare dell'anteprima non va nel path tracing (lì il cielo è la mappa
     // d'ambiente; la texture in più confondeva le texture degli altri materiali: rocce bianche, mare abbagliante)
+    // la mappa del cielo è sempre lo stesso oggetto, aggiornato con l'ora: il path tracer va
+    // obbligato a rileggerla (altrimenti di notte usava ancora il cielo di giorno dello scatto prima)
+    (this.pt as any)._previousEnvironment = null;
     const water = this.outdoor?.water || null, waterEnv = water?.envMap || null;
     if (water) { water.envMap = null; water.needsUpdate = true; }
     this.shotRestore = () => {
