@@ -63,6 +63,7 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     addEventListener('pointerup', up);
   };
   // computer: la scheda si sposta trascinandola (da un punto qualsiasi che non sia un comando)
+  const [scrolled, setScrolled] = useState(false);
   const [pinned, setPinned] = useState<{ left: number; top: number } | null>(null);
   const dragStart = (e: React.PointerEvent) => {
     e.stopPropagation();
@@ -104,7 +105,7 @@ export default function Pop({ x, y, width = 300, children, anchor = 'side', bott
     setPos({ left, top, ox: x - left, oy: y - top });
   }, [x, y, width, anchor, bottom, hgt]);
   return (
-    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && snap === 0 ? ' mini' : ''}${phone && snap === 2 ? ' full' : ''}`} onPointerDown={dragStart} onClickCapture={(e) => { if (phone && snap === 0 && !(e.target as HTMLElement).closest('.toggle,.x')) { e.stopPropagation(); setSnap(1); } }} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
+    <div ref={el} className={`pop glass ${className}${phone ? ' sheet' : ''}${phone && snap === 0 ? ' mini' : ''}${phone && snap === 2 ? ' full' : ''}${scrolled ? ' scrolled' : ''}`} onScroll={(e) => setScrolled((e.currentTarget as HTMLElement).scrollTop > 4)} onPointerDown={dragStart} onClickCapture={(e) => { if (phone && snap === 0 && !(e.target as HTMLElement).closest('.toggle,.x')) { e.stopPropagation(); setSnap(1); } }} onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}
       style={{ width: phone ? innerWidth - 16 : width, left: pinned ? pinned.left : pos?.left ?? -9999, top: pinned ? pinned.top : pos?.top, bottom: pinned ? undefined : pos?.bottom, animation: pinned ? 'none' : undefined, ['--ox' as any]: `${pos?.ox ?? 0}px`, ['--oy' as any]: `${pos?.oy ?? 0}px`, visibility: pos ? 'visible' : 'hidden' }}>
       {phone ? <div className="grab" onPointerDown={grabDown} title={snap === 0 ? 'Apri' : 'Riduci'}><i />{onClose && <button className="x" aria-label="Chiudi" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(); }}>×</button>}</div>
         : <div className="grip" title="Trascina per spostare"><i /></div>}

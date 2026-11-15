@@ -9,7 +9,7 @@ import {
   fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter,
 } from '../engine/photometry';
 import { POSES, SKINS, poseJoints, PoseId } from '../engine/mannequin';
-import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection } from '../actions';
+import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection, SCHEMES, applyScheme } from '../actions';
 import { stopsLabel, luxAtTarget } from '../export/exports';
 import { sunSky } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
@@ -150,17 +150,33 @@ export function LightCard({ id }: { id: string }) {
   );
 }
 
+// rapporto chiave:riempimento come sul set (2:1 = 1 stop)
+export function contrastLabel(r: number) {
+  const st = Math.log2(r);
+  const k = r < 9.95 ? (Math.round(r * 10) / 10).toString().replace('.', ',') : Math.round(r).toString();
+  const d = st < 0.6 ? 'piatto' : st < 1.6 ? 'morbido' : st < 2.6 ? 'classico' : st < 3.6 ? 'drammatico' : 'molto duro';
+  return `${k}:1 · ${st.toFixed(1).replace('.', ',')} stop · ${d}`;
+}
+
 export function PersonCard({ id }: { id: string }) {
   const P = useStore((s) => s.people.find((p) => p.id === id));
   const manikin = useStore((s) => s.manikin);
+  // il contrasto si ricalcola a ogni cambio di luci, sole, ambiente o persone
+  useStore((s) => s.lights); useStore((s) => s.sun); useStore((s) => s.ambient); useStore((s) => s.people); useStore((s) => s.furniture);
   const st = useStore.getState;
   const xy = useAnchor(P?.position, id);
   if (!P) return null;
+  const fc = eng()?.faceContrast(id);
   const up = (p: any) => st().updatePerson(id, p);
   const snap = () => st().snapshot();
   return (
     <Pop x={xy.x} y={xy.y - 120} onClose={() => useStore.setState({ selection: null })}>
       <h3><span>{P.name}</span><Del title="Rimuovi persona" onClick={removeSelection} /></h3>
+      <div className="line num"><span title="Rapporto tra il lato illuminato e il lato in ombra del viso">Contrasto</span><b>{fc ? contrastLabel(fc.ratio) : 'volto al buio'}</b></div>
+      <div className="row" style={{ marginTop: 10 }}>
+        <div className="k"><span>Schema luci</span></div>
+        <div className="chips">{SCHEMES.map((q) => <button key={q.id} className="chip" onClick={() => applyScheme(id, q.id)}>{q.name}</button>)}</div>
+      </div>
       <div className="poses" style={{ marginBottom: 14 }}>
         {POSES.map((q) => <button key={q.id} className={`pose ${P.pose === q.id ? 'on' : ''}`} onClick={() => { snap(); up({ pose: q.id as PoseId, joints: poseJoints(q.id as PoseId) }); }}><Svg d={POSE_ICONS[q.id]} vb="0 0 28 36" />{q.name}</button>)}
       </div>

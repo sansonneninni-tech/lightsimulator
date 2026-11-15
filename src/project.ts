@@ -232,7 +232,7 @@ export async function openProject(file: File) {
       const sc = data.scene;
       e.clearBuilt();
       useStore.setState({
-        phase: 'ready', status: '', recon: null, photos: [], placeName: data.placeName || 'Stanza',
+        phase: 'ready', abCur: 'A', abOther: null, status: '', recon: null, photos: [], placeName: data.placeName || 'Stanza',
         room: sc.room, furniture: sc.furniture || [], lights: sc.lights || [], people: sc.people || [], props: sc.props || [],
         sun: sc.sun, cam: sc.cam, ambient: 0, shots: data.shots || [], past: [], future: [], selection: null, manikin: null,
       });

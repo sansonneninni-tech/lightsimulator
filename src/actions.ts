@@ -201,18 +201,74 @@ export function removeSelection() {
   const sel = s.selection;
   if (!sel) return;
   s.snapshot();
-  if (sel.type === 'furniture') { removeFurniture(sel.id); s.showToast('Arredo rimosso. Cmd+Z per riaverlo.'); return; }
-  if (sel.type === 'opening') { removeOpening(sel.id); s.showToast('Apertura rimossa. Cmd+Z per riaverla.'); return; }
+  if (sel.type === 'furniture') { removeFurniture(sel.id); s.showToast('Arredo rimosso.', true); return; }
+  if (sel.type === 'opening') { removeOpening(sel.id); s.showToast('Apertura rimossa.', true); return; }
   if (sel.type === 'light') {
     const L = s.lights.find((l) => l.id === sel.id);
-    if (L?.attached) { removeFurniture(L.attached); s.showToast('Lampada rimossa. Cmd+Z per riaverla.'); return; }
+    if (L?.attached) { removeFurniture(L.attached); s.showToast('Lampada rimossa.', true); return; }
     useStore.setState({ lights: s.lights.filter((l) => l.id !== sel.id), selection: null });
-    s.showToast(`${L?.name || 'Luce'} rimossa. Cmd+Z per riaverla.`);
+    s.showToast(`${L?.name || 'Luce'} rimossa.`, true);
   } else if (sel.type === 'person') {
     useStore.setState({ people: s.people.filter((l) => l.id !== sel.id), selection: null, manikin: null });
-    s.showToast('Persona rimossa. Cmd+Z per riaverla.');
+    s.showToast('Persona rimossa.', true);
   } else {
     useStore.setState({ props: s.props.filter((l) => l.id !== sel.id), selection: null });
-    s.showToast('Oggetto rimosso. Cmd+Z per riaverlo.');
+    s.showToast('Oggetto rimosso.', true);
   }
+}
+
+// schemi di luce classici attorno a una persona (angoli rispetto a dove guarda: + = sua sinistra)
+export const SCHEMES = [
+  { id: 'rembrandt', name: 'Rembrandt', lights: [
+    { type: 'Pannello', name: 'Chiave', a: 45, h: 0.6, d: 1.8, rel: 0 },
+    { type: 'Pannello', name: 'Riempimento', a: -35, h: 0, d: 2.2, rel: -2 }] },
+  { id: 'farfalla', name: 'Farfalla', lights: [
+    { type: 'Fresnel', name: 'Chiave', a: 0, h: 0.85, d: 1.7, rel: 0 },
+    { type: 'Pannello', name: 'Riempimento', a: 0, h: -0.55, d: 1.3, rel: -1.5 }] },
+  { id: 'split', name: 'Split', lights: [
+    { type: 'Fresnel', name: 'Chiave', a: 90, h: 0.1, d: 1.6, rel: 0 }] },
+  { id: 'controluce', name: 'Controluce', lights: [
+    { type: 'Pannello', name: 'Chiave', a: 35, h: 0.5, d: 2, rel: 0 },
+    { type: 'Fresnel', name: 'Controluce', a: 150, h: 0.8, d: 2, rel: 1 }] },
+] as const;
+
+export function applyScheme(personId: string, schemeId: string) {
+  const s = useStore.getState();
+  const e = eng();
+  const P = s.people.find((p) => p.id === personId);
+  const sc = SCHEMES.find((q) => q.id === schemeId);
+  if (!P || !sc) return;
+  s.snapshot();
+  const head = e?.jointWorld(personId, 'head') || new THREE.Vector3(P.position[0], P.position[1] + P.height * 0.92, P.position[2]);
+  const face = head.clone().add(new THREE.Vector3(0, 0.06, 0));
+  const r = THREE.MathUtils.degToRad(P.rotationY);
+  const fwd = new THREE.Vector3(Math.sin(r), 0, Math.cos(r));
+  const c = s.cam;
+  const want = (250 * c.fStop * c.fStop) / (c.shutter * c.iso);
+  const inside = (() => { const { min, max } = room(); return face.x > min[0] && face.x < max[0] && face.z > min[2] && face.z < max[2]; })();
+  // le luci aggiunte a mano lasciano il posto allo schema; finestre e lampade restano
+  const kept = s.lights.filter((l) => l.origin !== 'aggiunta' || l.attached);
+  const made = sc.lights.map((d) => {
+    const fixtureId = TYPE_FIXTURE[d.type];
+    const dir = fwd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(d.a));
+    const pos = face.clone().addScaledVector(dir, d.d);
+    pos.y = Math.max(0.3, face.y + d.h);
+    if (inside) clampToRoom(pos, 0.3);
+    const L = makeLight(fixtureId, pos.toArray() as any, face.toArray() as any, { name: d.name });
+    const n = pos.clone().sub(face).normalize();
+    const full = illuminanceAt({ ...L, stops: 0 }, face, n);
+    if (full > 0) L.stops = Math.max(-8, Math.min(2, Math.round(Math.log2((want * Math.pow(2, d.rel)) / full) * 3) / 3));
+    return L;
+  });
+  useStore.setState({ lights: [...kept, ...made], selection: { type: 'person', id: personId } });
+  s.showToast(`Schema ${sc.name}: ${made.length === 1 ? 'una luce' : made.length + ' luci'} attorno a ${P.name}.`, true);
+}
+
+// confronto A/B: due versioni delle luci, si passa dall'una all'altra
+export function switchAB() {
+  const s = useStore.getState();
+  const other = s.abOther ?? JSON.parse(JSON.stringify(s.lights));
+  const first = !s.abOther;
+  useStore.setState({ lights: other, abOther: JSON.parse(JSON.stringify(s.lights)), abCur: s.abCur === 'B' ? 'A' : 'B', selection: null });
+  s.showToast(first ? 'Versione B: è una copia di A, cambiala come vuoi. Tocca A per tornare.' : `Versione ${s.abCur === 'B' ? 'A' : 'B'}`);
 }

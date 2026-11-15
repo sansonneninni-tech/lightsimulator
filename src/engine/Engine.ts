@@ -1228,6 +1228,23 @@ export class Engine {
     return best;
   }
 
+  // rapporto di contrasto sul volto: lato più illuminato contro lato in ombra (guance, attorno alla direzione dello sguardo)
+  faceContrast(personId: string) {
+    const o = this.people.get(personId);
+    const j = (o?.obj.userData.joints as Record<string, THREE.Object3D>)?.head;
+    if (!o || !j || !this.snapshot) return null;
+    o.obj.updateMatrixWorld(true);
+    const c = j.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.08, 0));
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(o.obj.getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize();
+    const lux = [-75, -40, 0, 40, 75].map((a) => {
+      const n = fwd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(a));
+      return this.readingAt(c.clone().addScaledVector(n, 0.12), n)?.lux || 0;
+    });
+    const key = Math.max(...lux), fill = Math.max(0.01, Math.min(lux[0], lux[4]));
+    if (key < 0.5) return null;
+    return { key, fill, ratio: key / fill, stops: Math.log2(key / fill), keySide: lux[0] > lux[4] ? 1 : -1 };
+  }
+
   // esposizione automatica per l'interno (le finestre, molto più chiare, non contano)
   autoExposure(): { iso: number; fStop: number; shutter: number } | null {
     if (!this.snapshot) return null;

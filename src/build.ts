@@ -193,7 +193,7 @@ export async function createRoom(t: Template) {
   const sun = orientSunFor(room, t.hour ?? 10.5);
   e.clearBuilt();
   useStore.setState({
-    phase: 'ready', status: '', recon: null, photos: [], placeName: t.name, room, furniture, lights, people, props: [], sun,
+    phase: 'ready', abCur: 'A', abOther: null, status: '', recon: null, photos: [], placeName: t.name, room, furniture, lights, people, props: [], sun,
     cam: { ...defaultCam(), focal: 18 }, ambient: 0, shots: [], past: [], future: [], selection: null, manikin: null, meterPin: null, meter: false,
   });
   e.apply(snapshotNow());

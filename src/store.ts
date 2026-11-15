@@ -68,9 +68,11 @@ interface Store extends SceneSnapshot {
   shots: Shot[];
   shooting: number; // 0 = no, 0..1 progresso
   camMove: import('./engine/camMove').CamMove | null; // movimento di camera scelto (null = camera ferma)
+  abCur: 'A' | 'B'; // confronto A/B: versione attiva delle luci
+  abOther: import('./engine/photometry').LightState[] | null; // l'altra versione
   past: string[];
   future: string[];
-  toast: { text: string; t: number } | null;
+  toast: { text: string; t: number; undo?: boolean } | null;
   set: (p: Partial<Store>) => void;
   snapshot: () => void;
   undo: () => void;
@@ -79,7 +81,7 @@ interface Store extends SceneSnapshot {
   updatePerson: (id: string, p: Partial<PersonState>) => void;
   updateProp: (id: string, p: Partial<PropState>) => void;
   updateFurniture: (id: string, p: Partial<FurnitureState>) => void;
-  showToast: (text: string) => void;
+  showToast: (text: string, undo?: boolean) => void;
 }
 
 export const defaultCam = (): CamState => ({ focal: 24, sensor: 's35', iso: 800, fStop: 2.8, shutter: 1 / 50, aspect: 'free', falseColor: false, focus: 0 });
@@ -111,6 +113,8 @@ export const useStore = create<Store>((set, get) => ({
   shots: [],
   shooting: 0,
   camMove: null,
+  abCur: 'A',
+  abOther: null,
   past: [],
   future: [],
   toast: null,
@@ -137,5 +141,5 @@ export const useStore = create<Store>((set, get) => ({
   updatePerson: (id, p) => set((s) => ({ people: s.people.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
   updateProp: (id, p) => set((s) => ({ props: s.props.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
   updateFurniture: (id, p) => set((s) => ({ furniture: s.furniture.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
-  showToast: (text) => set({ toast: { text, t: Date.now() } }),
+  showToast: (text, undo) => set({ toast: { text, t: Date.now(), undo } }),
 }));

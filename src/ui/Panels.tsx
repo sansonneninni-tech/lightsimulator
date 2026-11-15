@@ -10,7 +10,7 @@ import { cssColor } from './Handles';
 import { FOCALS, SENSORS, ISO_VALUES, FSTOPS, SHUTTERS, ASPECTS, fmtShutter, fmtStop } from '../engine/photometry';
 import { POSES, PoseId } from '../engine/mannequin';
 import { WEATHER, fmtHour, sunAngles, sunSky } from '../engine/sun';
-import { LIGHT_TYPES, addLight, addPerson, addProp } from '../actions';
+import { LIGHT_TYPES, addLight, addPerson, addProp, switchAB } from '../actions';
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
 import { autoExpose, updateRoom } from '../build';
@@ -35,9 +35,10 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
   const skyK = sunSky(sun).skyK;
   const [more, setMore] = useState(false);
   const hasPhoto = useStore((s) => !!s.recon);
+  const ab = useStore((s) => s.abCur);
   return (
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={320} onClose={onClose}>
-      <h3>Luci</h3>
+      <h3><span>Luci</span><div className="ab" title="Due versioni delle luci da confrontare">{(['A', 'B'] as const).map((v) => <button key={v} className={ab === v ? 'on' : ''} onClick={() => { if (ab !== v) switchAB(); }}>{v}</button>)}</div></h3>
       <div className="list">
         {lights.map((L) => (
           <div key={L.id} className="it" onClick={() => { useStore.setState({ selection: { type: 'light', id: L.id } }); onClose(); }}>

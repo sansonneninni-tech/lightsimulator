@@ -166,7 +166,7 @@ export default function App() {
   useEffect(() => {
     if (!toast) return;
     setToastOn(true);
-    const t = setTimeout(() => setToastOn(false), 2800);
+    const t = setTimeout(() => setToastOn(false), toast.undo ? 5000 : 2800);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -316,7 +316,7 @@ export default function App() {
           <Viewer />
         </>
       )}
-      <div id="toast" className={`glass ${toastOn ? 'show' : ''}`}>{toast?.text}</div>
+      <div id="toast" className={`glass ${toastOn ? 'show' : ''}${toast?.undo ? ' act' : ''}`}>{toast?.text}{toast?.undo && <button onClick={() => { useStore.getState().undo(); setToastOn(false); }}>Annulla</button>}</div>
     </div>
   );
 }
