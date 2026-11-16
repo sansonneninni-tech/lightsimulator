@@ -3,6 +3,8 @@ import { LightState } from './engine/photometry';
 import { PersonState } from './engine/mannequin';
 import { SunState, defaultSun } from './engine/sun';
 import type { Reconstruction } from './engine/reconstruct';
+import type { RoomSpec } from './engine/room';
+import type { FurnitureState } from './engine/furniture';
 
 export interface PropState {
   id: string;
@@ -31,6 +33,8 @@ export interface Shot {
   height: number;
   scene: SceneSnapshot;
   createdAt: number;
+  // fotogramma di un movimento di camera
+  move?: { group: string; kind: string; amount: number; frame: number; of: number; label: string; text: string; start: [number, number, number]; end: [number, number, number]; endDir: [number, number, number] };
 }
 
 export interface SceneSnapshot {
@@ -40,11 +44,15 @@ export interface SceneSnapshot {
   sun: SunState;
   cam: CamState;
   ambient: number;
+  room?: RoomSpec | null;          // stanza costruita a mano
+  furniture?: FurnitureState[];
 }
 
-export type Selection = { type: 'light' | 'person' | 'prop'; id: string } | null;
+export type Selection = { type: 'light' | 'person' | 'prop' | 'furniture' | 'opening'; id: string } | null;
 
 interface Store extends SceneSnapshot {
+  room: RoomSpec | null;
+  furniture: FurnitureState[];
   phase: 'empty' | 'working' | 'ready';
   status: string;
   progress: number;
@@ -59,9 +67,13 @@ interface Store extends SceneSnapshot {
   viewer: string | null;
   shots: Shot[];
   shooting: number; // 0 = no, 0..1 progresso
+  camMove: import('./engine/camMove').CamMove | null; // movimento di camera scelto (null = camera ferma)
+  creator: string | null; // persona di cui si sta creando l'aspetto
+  abCur: 'A' | 'B'; // confronto A/B: versione attiva delle luci
+  abOther: import('./engine/photometry').LightState[] | null; // l'altra versione
   past: string[];
   future: string[];
-  toast: { text: string; t: number } | null;
+  toast: { text: string; t: number; undo?: boolean } | null;
   set: (p: Partial<Store>) => void;
   snapshot: () => void;
   undo: () => void;
@@ -69,13 +81,14 @@ interface Store extends SceneSnapshot {
   updateLight: (id: string, p: Partial<LightState>) => void;
   updatePerson: (id: string, p: Partial<PersonState>) => void;
   updateProp: (id: string, p: Partial<PropState>) => void;
-  showToast: (text: string) => void;
+  updateFurniture: (id: string, p: Partial<FurnitureState>) => void;
+  showToast: (text: string, undo?: boolean) => void;
 }
 
 export const defaultCam = (): CamState => ({ focal: 24, sensor: 's35', iso: 800, fStop: 2.8, shutter: 1 / 50, aspect: 'free', falseColor: false, focus: 0 });
 
 const snap = (s: SceneSnapshot): string =>
-  JSON.stringify({ lights: s.lights, people: s.people, props: s.props, sun: s.sun, cam: s.cam, ambient: s.ambient });
+  JSON.stringify({ lights: s.lights, people: s.people, props: s.props, sun: s.sun, cam: s.cam, ambient: s.ambient, room: s.room, furniture: s.furniture });
 
 export const useStore = create<Store>((set, get) => ({
   phase: 'empty',
@@ -87,6 +100,8 @@ export const useStore = create<Store>((set, get) => ({
   lights: [],
   people: [],
   props: [],
+  room: null,
+  furniture: [],
   sun: defaultSun(),
   cam: defaultCam(),
   ambient: 0.18,
@@ -98,6 +113,10 @@ export const useStore = create<Store>((set, get) => ({
   viewer: null,
   shots: [],
   shooting: 0,
+  camMove: null,
+  abCur: 'A',
+  creator: null,
+  abOther: null,
   past: [],
   future: [],
   toast: null,
@@ -123,5 +142,6 @@ export const useStore = create<Store>((set, get) => ({
   updateLight: (id, p) => set((s) => ({ lights: s.lights.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
   updatePerson: (id, p) => set((s) => ({ people: s.people.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
   updateProp: (id, p) => set((s) => ({ props: s.props.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
-  showToast: (text) => set({ toast: { text, t: Date.now() } }),
+  updateFurniture: (id, p) => set((s) => ({ furniture: s.furniture.map((l) => (l.id === id ? { ...l, ...p } : l)) })),
+  showToast: (text, undo) => set({ toast: { text, t: Date.now(), undo } }),
 }));

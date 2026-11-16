@@ -1,0 +1,289 @@
+<!doctype html><html><body>
+<!-- Uso: servire una cartella con three in /three/ (node_modules/three) e chiamare window.exportModel(nome) -> glb in base64; poi gltf-transform optimize come gli altri. -->
+<script type="importmap">{"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}</script>
+<script type="module">
+// Modelli costruiti a mano (CC0, opera del progetto): oggetti da esterni senza un modello realistico libero
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const mat = (color, roughness = 0.6, metalness = 0, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness, metalness, ...extra });
+const mesh = (g, m, name) => { const o = new THREE.Mesh(g, m); if (name) o.name = name; return o; };
+// cilindro tra due punti
+function rod(a, b, r, m, seg = 10) {
+  const d = b.clone().sub(a), L = d.length();
+  const g = new THREE.CylinderGeometry(r, r, L, seg, 1);
+  const o = mesh(g, m);
+  o.position.copy(a).addScaledVector(d, 0.5);
+  o.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+  return o;
+}
+function canvasTex(w, h, draw, repeat) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  if (repeat) t.repeat.set(...repeat);
+  return t;
+}
+function rng(s) { return () => { s |= 0; s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+const OA = (o, pr) => { if (pr.position) o.position.copy(pr.position); if (pr.rotation) o.rotation.copy(pr.rotation); return o; };
+const B = {};
+// ---------- ombrellone ----------
+B.ombrellone = (c1 = '#f4f1ea', c2 = '#2f5d8a') => {
+  const g = new THREE.Group();
+  const pole = mat('#d9d6cf', 0.35, 0.8);
+  g.add(rod(V(0, 0, 0), V(0, 2.35, 0), 0.018, pole));
+  g.add(rod(V(0, 0.0, 0), V(0, 0.02, 0), 0.12, mat('#3a3a3a', 0.8)));
+  const N = 8, R = 1.05, H = 0.38;
+  const ma = mat(c1, 0.85, 0, { side: THREE.DoubleSide }), mb = mat(c2, 0.85, 0, { side: THREE.DoubleSide });
+  for (let i = 0; i < N; i++) {
+    const cg = new THREE.ConeGeometry(R, H, 6, 4, true, (i / N) * Math.PI * 2, (Math.PI * 2) / N);
+    // falde leggermente cadenti
+    const p = cg.attributes.position;
+    for (let k = 0; k < p.count; k++) { const r = Math.hypot(p.getX(k), p.getZ(k)) / R; p.setY(k, p.getY(k) - 0.06 * Math.sin(r * Math.PI)); }
+    cg.computeVertexNormals();
+    const o = mesh(cg, i % 2 ? mb : ma); o.position.y = 2.3 - H / 2; g.add(o);
+  }
+  // balza
+  for (let i = 0; i < N; i++) {
+    const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+    const cg = new THREE.CylinderGeometry(R, R, 0.1, 6, 1, true, a0, a1 - a0);
+    const o = mesh(cg, i % 2 ? mb : ma); o.position.y = 2.3 - H - 0.05; g.add(o);
+  }
+  g.add(mesh(new THREE.SphereGeometry(0.035, 12, 8), pole)).position.y = 2.33;
+  // stecche
+  for (let i = 0; i < N; i++) { const a = (i / N) * Math.PI * 2; g.add(rod(V(0, 1.75, 0), V(Math.sin(a) * 0.45, 2.1, Math.cos(a) * 0.45), 0.006, pole, 5)); }
+  return g;
+};
+// ---------- lettino ----------
+B.lettino = () => {
+  const g = new THREE.Group();
+  const wood = mat('#b98a5a', 0.55), metal = mat('#cfcfcf', 0.3, 0.9), cush = mat('#eae6dc', 0.95);
+  const L = 1.95, W = 0.68, h = 0.32;
+  for (const x of [-W / 2 + 0.03, W / 2 - 0.03]) {
+    const r = mesh(new THREE.BoxGeometry(0.05, 0.07, L), wood); r.position.set(x, h, 0); g.add(r);
+    for (const z of [-L / 2 + 0.12, L / 2 - 0.12]) { const lg = mesh(new THREE.BoxGeometry(0.05, h, 0.05), wood); lg.position.set(x, h / 2, z); g.add(lg); }
+  }
+  // doghe del piano
+  for (let z = -0.15; z < L / 2 - 0.05; z += 0.09) { const s = mesh(new THREE.BoxGeometry(W - 0.02, 0.025, 0.07), wood); s.position.set(0, h + 0.045, z); g.add(s); }
+  // schienale inclinato (dietro, verso -Z)
+  const back = new THREE.Group(); back.position.set(0, h + 0.05, -0.2); back.rotation.x = 0.75;
+  for (let z = 0; z < 0.78; z += 0.09) { const s = mesh(new THREE.BoxGeometry(W - 0.02, 0.025, 0.07), wood); s.position.set(0, 0, -z - 0.04); back.add(s); }
+  const cb = mesh(new THREE.BoxGeometry(W - 0.08, 0.06, 0.74, 4, 1, 8), cush); cb.position.set(0, 0.045, -0.41); back.add(cb);
+  g.add(back);
+  const cs = mesh(new THREE.BoxGeometry(W - 0.08, 0.06, 1.12, 4, 1, 8), cush); cs.position.set(0, h + 0.09, 0.39); g.add(cs);
+  // ruote
+  for (const x of [-W / 2 - 0.01, W / 2 + 0.01]) { const wh = mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.035, 18), mat('#2a2a2a', 0.8)); wh.rotation.z = Math.PI / 2; wh.position.set(x, 0.08, -L / 2 + 0.12); g.add(wh); }
+  return g;
+};
+// ---------- telo da mare ----------
+B.telo = () => {
+  const t = canvasTex(512, 1024, (x, w, h) => {
+    const cols = ['#e8a33d', '#f4efe4', '#2f6f8f', '#f4efe4', '#c8553d'];
+    for (let i = 0; i < 20; i++) { x.fillStyle = cols[i % cols.length]; x.fillRect(0, (i * h) / 20, w, h / 20 + 1); }
+    x.globalAlpha = 0.08; for (let i = 0; i < 4000; i++) { x.fillStyle = i % 2 ? '#000' : '#fff'; x.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+  });
+  const g = new THREE.Group();
+  const geo = new THREE.PlaneGeometry(0.85, 1.7, 8, 16); geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, 0.006 + 0.004 * Math.sin(p.getX(i) * 9) * Math.cos(p.getZ(i) * 5));
+  geo.computeVertexNormals();
+  g.add(mesh(geo, mat('#ffffff', 0.95, 0, { map: t, side: THREE.DoubleSide })));
+  return g;
+};
+// ---------- cactus a candelabro (saguaro) ----------
+function ribbed(r0, r1, len, ribs = 14, seg = 24) {
+  const g = new THREE.CylinderGeometry(r1, r0, len, ribs * 4, seg, true);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), a = Math.atan2(z, x), k = 1 + 0.07 * Math.cos(a * ribs);
+    p.setX(i, x * k); p.setZ(i, z * k);
+  }
+  g.computeVertexNormals(); g.translate(0, len / 2, 0);
+  return g;
+}
+function cap(r, ribs = 14) {
+  const g = new THREE.SphereGeometry(r, ribs * 4, 10, 0, Math.PI * 2, 0, Math.PI / 2);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i), a = Math.atan2(z, x), k = 1 + 0.07 * Math.cos(a * ribs); p.setX(i, x * k); p.setZ(i, z * k); }
+  g.computeVertexNormals();
+  return g;
+}
+const cactusMat = () => {
+  const t = canvasTex(256, 256, (x, w, h) => { x.fillStyle = '#56703f'; x.fillRect(0, 0, w, h); const r = rng(3); for (let i = 0; i < 900; i++) { x.fillStyle = r() < 0.5 ? 'rgba(220,210,170,0.55)' : 'rgba(40,60,30,0.35)'; x.fillRect(r() * w, r() * h, 2, 2); } }, [6, 6]);
+  return mat('#ffffff', 0.75, 0, { map: t });
+};
+function arm(g, m, x0, y0, side, out, up, r) {
+  const bend = new THREE.TorusGeometry(out, r, 12, 24, Math.PI / 2);
+  const o = mesh(bend, m); o.rotation.y = side > 0 ? 0 : Math.PI; o.position.set(x0 + side * 0, y0 + out, 0);
+  // gomito: dal tronco in fuori e poi in su
+  const curve = new THREE.CatmullRomCurve3([V(x0, y0, 0), V(x0 + side * out * 0.7, y0 + 0.05, 0), V(x0 + side * out, y0 + out * 0.6, 0), V(x0 + side * out, y0 + out + 0.1, 0)]);
+  g.add(mesh(new THREE.TubeGeometry(curve, 20, r, 28, false), m));
+  g.add(OA(mesh(ribbed(r, r * 0.92, up, 12), m), { position: V(x0 + side * out, y0 + out + 0.1, 0) }));
+  g.add(OA(mesh(cap(r * 0.92, 12), m), { position: V(x0 + side * out, y0 + out + 0.1 + up, 0) }));
+}
+B.saguaro = () => {
+  const g = new THREE.Group(), m = cactusMat();
+  g.add(mesh(ribbed(0.2, 0.18, 3.0), m));
+  g.add(OA(mesh(cap(0.18), m), { position: V(0, 3.0, 0) }));
+  arm(g, m, 0.12, 1.2, 1, 0.42, 0.9, 0.13);
+  arm(g, m, -0.12, 1.65, -1, 0.36, 0.75, 0.12);
+  return g;
+};
+B.barile = () => {
+  const g = new THREE.Group(), m = cactusMat();
+  const s = new THREE.SphereGeometry(0.28, 72, 24); const p = s.attributes.position;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.atan2(z, x), k = 1 + 0.08 * Math.cos(a * 18); p.setXYZ(i, x * k, y * 1.15, z * k); }
+  s.computeVertexNormals(); s.translate(0, 0.28, 0);
+  g.add(mesh(s, m));
+  // corona di fiori gialli
+  const fm = mat('#e9c23a', 0.6);
+  for (let i = 0; i < 9; i++) { const a = (i / 9) * Math.PI * 2; const f = mesh(new THREE.SphereGeometry(0.03, 8, 6), fm); f.scale.y = 0.6; f.position.set(Math.cos(a) * 0.07, 0.6, Math.sin(a) * 0.07); g.add(f); }
+  // vaso di coccio basso
+  const pot = mesh(new THREE.CylinderGeometry(0.33, 0.27, 0.22, 32), mat('#a95f3d', 0.85)); pot.position.y = 0.11; g.add(pot);
+  g.children[0].position.y = 0.12;
+  g.children.slice(1, 10).forEach((c) => (c.position.y += 0.12));
+  return g;
+};
+// ---------- palma ----------
+B.palma = (H = 6.2, lean = 0.6, seed = 5) => {
+  const g = new THREE.Group(), r = rng(seed);
+  const bark = canvasTex(256, 1024, (x, w, h) => { x.fillStyle = '#8a7a63'; x.fillRect(0, 0, w, h); for (let i = 0; i < 64; i++) { const y = (i * h) / 64; x.fillStyle = '#5f523f'; x.fillRect(0, y, w, 4); x.fillStyle = '#a3937a'; x.fillRect(0, y + 5, w, 3); } }, [3, 1]);
+  const top = V(lean, H, 0.15);
+  const trunk = new THREE.CatmullRomCurve3([V(0, 0, 0), V(lean * 0.15, H * 0.35, 0), V(lean * 0.55, H * 0.7, 0.05), top]);
+  const tg = new THREE.TubeGeometry(trunk, 40, 1, 16, false);
+  // rastremata
+  const p = tg.attributes.position, uv = tg.attributes.uv;
+  const pts = trunk.getSpacedPoints(40);
+  for (let i = 0; i < p.count; i++) { const u = uv.getX(i), c = trunk.getPointAt(u), rad = 0.2 - 0.07 * u + (u < 0.04 ? 0.08 * (1 - u / 0.04) : 0); const v = V(p.getX(i), p.getY(i), p.getZ(i)).sub(c); p.setXYZ(i, c.x + v.x * rad, c.y + v.y * rad, c.z + v.z * rad); }
+  tg.computeVertexNormals();
+  g.add(mesh(tg, mat('#ffffff', 0.9, 0, { map: bark })));
+  g.add(OA(mesh(new THREE.SphereGeometry(0.2, 16, 10), mat('#6b5b3f', 0.9)), { position: top.clone() }));
+  // fronde: rachide arcuata con foglioline a pettine
+  const leafGeos = [];
+  const NF = 14;
+  for (let f = 0; f < NF; f++) {
+    const az = (f / NF) * Math.PI * 2 + r() * 0.3, up = 0.35 - (f % 3) * 0.25 + r() * 0.1, len = 2.3 + r() * 0.6;
+    const dir = V(Math.cos(az), 0, Math.sin(az));
+    const pts = [];
+    for (let i = 0; i <= 12; i++) { const t = i / 12; pts.push(top.clone().addScaledVector(dir, len * t).add(V(0, len * (up * t - 0.55 * t * t), 0))); }
+    const c = new THREE.CatmullRomCurve3(pts);
+    const side = V(0, 1, 0).cross(dir).normalize();
+    const pos = [], idx = [];
+    const NL = 34;
+    for (let i = 2; i < NL; i++) {
+      const t = i / NL, a = c.getPointAt(t), tan = c.getTangentAt(t);
+      const ll = 0.55 * Math.sin(Math.PI * Math.min(1, t * 1.1)) + 0.05;
+      for (const s of [-1, 1]) {
+        const tip = a.clone().addScaledVector(side, s * ll).addScaledVector(tan, ll * 0.5).add(V(0, -ll * 0.35, 0));
+        const b0 = a.clone().addScaledVector(tan, -0.02), b1 = a.clone().addScaledVector(tan, 0.035);
+        const mid = a.clone().addScaledVector(side, s * ll * 0.5).addScaledVector(tan, ll * 0.25).add(V(0, -ll * 0.1, 0));
+        const n = pos.length / 3;
+        for (const v of [b0, b1, mid.clone().addScaledVector(tan, -0.03), mid.clone().addScaledVector(tan, 0.03), tip]) pos.push(v.x, v.y, v.z);
+        idx.push(n, n + 1, n + 3, n, n + 3, n + 2, n + 2, n + 3, n + 4);
+      }
+    }
+    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); lg.setIndex(idx); lg.computeVertexNormals();
+    leafGeos.push(lg);
+    const rg = new THREE.TubeGeometry(c, 12, 0.02, 5, false); leafGeos.push(rg.toNonIndexed().index ? rg : rg);
+  }
+  const merged = mergeGeometries(leafGeos.map((x) => { const y = x.index ? x.toNonIndexed() : x; y.deleteAttribute('uv'); return y; }));
+  merged.computeVertexNormals();
+  g.add(mesh(merged, mat('#4f6f2e', 0.7, 0, { side: THREE.DoubleSide })));
+  return g;
+};
+// ---------- cono stradale ----------
+B.cono = () => {
+  const g = new THREE.Group();
+  const or = mat('#e2531c', 0.55), wh = mat('#e9e9e4', 0.35), bk = mat('#1d1d1d', 0.85);
+  const base = mesh(new THREE.BoxGeometry(0.38, 0.03, 0.38), or); base.position.y = 0.015; g.add(base);
+  const H = 0.7, R0 = 0.15, R1 = 0.03;
+  const band = (y0, y1, m) => { const r0 = R0 + (R1 - R0) * (y0 / H), r1 = R0 + (R1 - R0) * (y1 / H); const c = mesh(new THREE.CylinderGeometry(r1, r0, y1 - y0, 32, 1, true), m); c.position.y = 0.03 + (y0 + y1) / 2; g.add(c); };
+  band(0, 0.26, or); band(0.26, 0.36, wh); band(0.36, 0.44, or); band(0.44, 0.52, wh); band(0.52, H, or);
+  return g;
+};
+// ---------- bicicletta ----------
+B.bici = () => {
+  const g = new THREE.Group();
+  const frame = mat('#24453a', 0.35, 0.4), steel = mat('#c9c9c9', 0.25, 1), tyre = mat('#1b1b1b', 0.85), leather = mat('#5a3a22', 0.6);
+  const R = 0.34, wb = 1.04;
+  const wheel = (x) => {
+    const t = mesh(new THREE.TorusGeometry(R, 0.018, 10, 48), tyre); t.position.set(x, R + 0.018, 0); g.add(t);
+    const rim = mesh(new THREE.TorusGeometry(R - 0.025, 0.008, 6, 48), steel); rim.position.copy(t.position); g.add(rim);
+    const hub = V(x, R + 0.018, 0);
+    for (let i = 0; i < 18; i++) { const a = (i / 18) * Math.PI * 2; g.add(rod(hub.clone().add(V(0, 0, i % 2 ? 0.03 : -0.03)), hub.clone().add(V(Math.cos(a) * (R - 0.03), Math.sin(a) * (R - 0.03), 0)), 0.0016, steel, 3)); }
+    g.add(OA(mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.09, 12), steel), { position: hub.clone(), rotation: new THREE.Euler(Math.PI / 2, 0, 0) }));
+    return hub;
+  };
+  const rear = wheel(-wb / 2), front = wheel(wb / 2);
+  const bb = V(-0.05, 0.3, 0), seat = V(-0.2, 0.83, 0), head = V(0.38, 0.86, 0), headLow = V(0.41, 0.72, 0);
+  const r = 0.016;
+  g.add(rod(bb, seat, r, frame)); g.add(rod(seat, head, r * 0.9, frame)); g.add(rod(bb, headLow, r * 1.1, frame));
+  g.add(rod(head, headLow, r * 1.2, frame));
+  for (const z of [-0.05, 0.05]) {
+    g.add(rod(bb.clone().setZ(z * 0.6), rear.clone().setZ(z), 0.009, frame));
+    g.add(rod(seat.clone().add(V(0, -0.03, 0)), rear.clone().setZ(z), 0.008, frame));
+    g.add(rod(headLow.clone(), front.clone().setZ(z), 0.011, frame));
+  }
+  // manubrio e sella
+  const stem = V(0.36, 0.98, 0); g.add(rod(head, stem, 0.012, steel));
+  const hb = new THREE.CatmullRomCurve3([V(0.25, 1.0, -0.28), V(0.33, 0.99, -0.16), stem, V(0.33, 0.99, 0.16), V(0.25, 1.0, 0.28)]);
+  g.add(mesh(new THREE.TubeGeometry(hb, 20, 0.011, 8, false), steel));
+  for (const z of [-0.26, 0.26]) g.add(OA(mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.09, 10), leather), { position: V(0.26, 1.0, z), rotation: new THREE.Euler(Math.PI / 2, 0, 0) }));
+  g.add(rod(seat, seat.clone().add(V(-0.02, 0.1, 0)), 0.012, steel));
+  const sd = mesh(new THREE.SphereGeometry(0.1, 16, 10), leather); sd.scale.set(1.3, 0.35, 0.65); sd.position.copy(seat).add(V(-0.03, 0.12, 0)); g.add(sd);
+  // pedivelle
+  g.add(OA(mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.008, 28), steel), { position: bb.clone().setZ(0.06), rotation: new THREE.Euler(Math.PI / 2, 0, 0) }));
+  g.add(rod(bb.clone().setZ(0.075), bb.clone().add(V(0.06, -0.15, 0.075)), 0.01, steel)); g.add(rod(bb.clone().setZ(-0.075), bb.clone().add(V(-0.06, 0.15, -0.075)), 0.01, steel));
+  for (const [p, z] of [[bb.clone().add(V(0.06, -0.15, 0)), 0.11], [bb.clone().add(V(-0.06, 0.15, 0)), -0.11]]) g.add(OA(mesh(new THREE.BoxGeometry(0.1, 0.02, 0.07), tyre), { position: p.setZ(z) }));
+  // catena
+  g.add(rod(bb.clone().add(V(0, 0.09, 0.06)), rear.clone().add(V(0, 0.04, 0.06)), 0.004, steel, 4));
+  g.add(rod(bb.clone().add(V(0, -0.09, 0.06)), rear.clone().add(V(0, -0.04, 0.06)), 0.004, steel, 4));
+  // cavalletto
+  g.add(rod(bb.clone().add(V(-0.1, 0, -0.06)), V(-0.25, 0.0, -0.18), 0.008, steel));
+  return g;
+};
+// ---------- sedia a sdraio ----------
+B.sdraio = () => {
+  const g = new THREE.Group();
+  const wood = mat('#c49a6c', 0.55);
+  const tela = canvasTex(256, 512, (x, w, h) => { for (let i = 0; i < 8; i++) { x.fillStyle = i % 2 ? '#f2eee4' : '#3a6f9b'; x.fillRect((i * w) / 8, 0, w / 8 + 1, h); } });
+  const W = 0.6;
+  for (const s of [-1, 1]) {
+    const x = (s * W) / 2;
+    g.add(rod(V(x, 0, 0.45), V(x, 0.95, -0.35), 0.017, wood)); // montante lungo
+    g.add(rod(V(x, 0, -0.35), V(x, 0.45, 0.35), 0.017, wood)); // gamba
+    g.add(rod(V(x, 0.0, -0.15), V(x, 0.33, -0.05), 0.014, wood));
+  }
+  for (const [y, z] of [[0.95, -0.35], [0.45, 0.35], [0.02, 0.45], [0.02, -0.35]]) g.add(rod(V(-W / 2, y, z), V(W / 2, y, z), 0.016, wood));
+  // tela appesa tra le traverse
+  const c = new THREE.CatmullRomCurve3([V(0, 0.95, -0.35), V(0, 0.55, -0.12), V(0, 0.33, 0.12), V(0, 0.45, 0.35)]);
+  const pts = c.getPoints(24); const pos = [], uv = [], idx = [];
+  pts.forEach((p, i) => { for (const s of [-1, 1]) { pos.push((s * (W - 0.04)) / 2, p.y, p.z); uv.push(s < 0 ? 0 : 1, i / 24); } if (i) { const n = i * 2; idx.push(n - 2, n - 1, n + 1, n - 2, n + 1, n); } });
+  const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); tg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); tg.setIndex(idx); tg.computeVertexNormals();
+  g.add(mesh(tg, mat('#ffffff', 0.9, 0, { map: tela, side: THREE.DoubleSide })));
+  return g;
+};
+// ---------- borsa frigo e secchiello da spiaggia ----------
+B.frigo = () => {
+  const g = new THREE.Group();
+  const body = mesh(new THREE.BoxGeometry(0.5, 0.32, 0.32), mat('#2f6fa6', 0.5)); body.position.y = 0.16; g.add(body);
+  const lid = mesh(new THREE.BoxGeometry(0.52, 0.06, 0.34), mat('#f0efea', 0.45)); lid.position.y = 0.35; g.add(lid);
+  const h = new THREE.CatmullRomCurve3([V(-0.2, 0.36, 0), V(-0.18, 0.47, 0), V(0, 0.5, 0), V(0.18, 0.47, 0), V(0.2, 0.36, 0)]);
+  g.add(mesh(new THREE.TubeGeometry(h, 20, 0.012, 8), mat('#f0efea', 0.45)));
+  return g;
+};
+
+window.models = B;
+window.exportModel = async (name) => {
+  const o = B[name]();
+  // trasformazioni cotte nei vertici: l'ingombro misurato dall'app resta esatto
+  o.updateMatrixWorld(true);
+  const flat = new THREE.Group(); flat.name = name;
+  o.traverse((m) => { if (!m.isMesh) return; const g = m.geometry.clone().applyMatrix4(m.matrixWorld); const k = new THREE.Mesh(g, m.material); k.name = m.name; flat.add(k); });
+  const sc = new THREE.Scene(); sc.add(flat);
+  const ab = await new GLTFExporter().parseAsync(sc, { binary: true, maxTextureSize: 1024 });
+  let s = ''; const u = new Uint8Array(ab); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+window.ready = true;
+</script></body></html>

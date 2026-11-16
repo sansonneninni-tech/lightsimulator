@@ -2,19 +2,23 @@
 import * as THREE from 'three';
 import { jsPDF } from 'jspdf';
 import type { SceneSnapshot } from '../store';
-import type { Reconstruction } from '../engine/reconstruct';
+import { furnitureKind } from '../engine/furniture';
 import {
   LightState, fixtureById, effectiveLumens, lightColor, spotAngles, gelById, diffusionById, effectiveKelvin,
   illuminanceAt, SENSORS, fmtShutter, fmtStop, ASPECTS,
 } from '../engine/photometry';
 import { POSES } from '../engine/mannequin';
+import { defaultLook, WHOLE_SUITS } from '../engine/human';
 import { sunSky, fmtHour, WEATHER } from '../engine/sun';
 import { PROP_KINDS } from '../engine/Engine';
+import { outdoorPlanLines, OUTDOORS } from '../engine/outdoor';
 
 export interface PlanInput {
   scene: SceneSnapshot;
-  recon: Reconstruction;
+  recon: { room: { min: [number, number, number]; max: [number, number, number] }; windows: { center: [number, number, number]; right: [number, number, number]; width: number }[] };
   camera: { position: [number, number, number]; dir: [number, number, number]; hfov: number };
+  // movimento di camera: posizione e direzione finali, descrizione
+  move?: { start: [number, number, number]; startDir: [number, number, number]; end: [number, number, number]; endDir: [number, number, number]; text: string };
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -36,7 +40,15 @@ export function luxAtTarget(L: LightState, skyLux: number) {
 export function planSVG(inp: PlanInput, opts: { width?: number; height?: number } = {}) {
   const W = opts.width || 1000, H = opts.height || 640;
   const { scene, recon, camera } = inp;
-  const [x0, , z0] = recon.room.min, [x1, , z1] = recon.room.max;
+  let [x0, , z0] = recon.room.min, [x1, , z1] = recon.room.max;
+  // esterni: niente pareti; la pianta abbraccia il set, la camera, le luci e le persone
+  const ext = scene.room?.outdoor ? scene.room : null;
+  const set = { x0, z0, x1, z1 };
+  if (ext) {
+    const pts: number[][] = [camera.position, ...scene.lights.map((L) => L.position), ...scene.people.map((p) => p.position), ...(scene.furniture || []).map((f) => f.position)];
+    for (const p of pts) { x0 = Math.min(x0, p[0] - 1.5); x1 = Math.max(x1, p[0] + 1.5); z0 = Math.min(z0, p[2] - 1.5); z1 = Math.max(z1, p[2] + 1.5); }
+    x0 -= 1; x1 += 1; z0 -= 3; z1 += 1;
+  }
   const pad = 70;
   // pianta a sinistra, legenda numerata a destra (i numeri rimandano alla lista materiale)
   const legendW = Math.round(W * 0.32);
@@ -52,7 +64,28 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   // griglia 1 m
   for (let x = Math.ceil(x0); x <= x1; x++) out += `<line x1="${X(x)}" y1="${Z(z0)}" x2="${X(x)}" y2="${Z(z1)}" stroke="#f0f0f0"/>`;
   for (let z = Math.ceil(z0); z <= z1; z++) out += `<line x1="${X(x0)}" y1="${Z(z)}" x2="${X(x1)}" y2="${Z(z)}" stroke="#f0f0f0"/>`;
-  out += `<rect x="${X(x0)}" y="${Z(z0)}" width="${(x1 - x0) * s}" height="${(z1 - z0) * s}" fill="none" stroke="#111" stroke-width="3"/>`;
+  if (ext) {
+    // scenario: mare, facciate e cordoli; poi l'area del set tratteggiata
+    const lines = outdoorPlanLines(ext, x0, x1, z0, z1);
+    const riva = lines.filter((l) => l.kind === 'riva');
+    if (riva.length) {
+      const d = riva.map((l, i) => `${i ? 'L' : 'M'}${X(l.a[0])},${Z(Math.max(z0, l.a[1]))}`).join(' ') + ` L${X(riva[riva.length - 1].b[0])},${Z(Math.max(z0, riva[riva.length - 1].b[1]))} L${X(x1)},${Z(z0)} L${X(x0)},${Z(z0)} Z`;
+      out += `<path d="${d}" fill="#e3eff8" stroke="none"/>`;
+      out += `<path d="${riva.map((l, i) => `${i ? 'L' : 'M'}${X(l.a[0])},${Z(Math.max(z0, l.a[1]))}`).join(' ')}" fill="none" stroke="#6aa9ff" stroke-width="2"/>`;
+      out += `<text x="${X(x0) + 10}" y="${Z(z0) + 18}" font-size="11" fill="#5a86b8">Mare</text>`;
+    }
+    for (const l of lines) {
+      if (l.kind === 'facciata') {
+        const outer = l.a[0] < 0 ? x0 : x1;
+        const xa = Math.min(l.a[0], outer), xb = Math.max(l.a[0], outer);
+        if (xb > xa) out += `<rect x="${X(xa)}" y="${Z(z0)}" width="${(xb - xa) * s}" height="${(z1 - z0) * s}" fill="#ecebe8"/>`;
+        out += `<line x1="${X(l.a[0])}" y1="${Z(z0)}" x2="${X(l.b[0])}" y2="${Z(z1)}" stroke="#111" stroke-width="3"/>`;
+      } else if (l.kind === 'cordolo') out += `<line x1="${X(l.a[0])}" y1="${Z(z0)}" x2="${X(l.b[0])}" y2="${Z(z1)}" stroke="#999" stroke-width="1.5"/>`;
+    }
+    if (ext.outdoor === 'citta') { out += `<text x="${X(-ext.width / 2) - 8}" y="${Z(z0) + 18}" text-anchor="end" font-size="11" fill="#888">Palazzi</text><text x="${X(0)}" y="${Z(z0) + 18}" text-anchor="middle" font-size="11" fill="#888">Strada</text>`; }
+    out += `<rect x="${X(set.x0)}" y="${Z(set.z0)}" width="${(set.x1 - set.x0) * s}" height="${(set.z1 - set.z0) * s}" fill="none" stroke="#111" stroke-width="1.5" stroke-dasharray="8 6"/>`;
+    out += `<text x="${X(set.x0) + 6}" y="${Z(set.z1) - 8}" font-size="11" fill="#444">Area del set · ${esc(OUTDOORS.find((o) => o.id === ext.outdoor)?.name || '')} · ${(set.x1 - set.x0).toFixed(0)} × ${(set.z1 - set.z0).toFixed(0)} m</text>`;
+  } else out += `<rect x="${X(x0)}" y="${Z(z0)}" width="${(x1 - x0) * s}" height="${(z1 - z0) * s}" fill="none" stroke="#111" stroke-width="3"/>`;
   // finestre
   for (const w of recon.windows) {
     const c = new THREE.Vector3(...w.center), r = new THREE.Vector3(...w.right);
@@ -67,7 +100,31 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   out += `<path d="M${X(cp[0])},${Z(cp[2])} L${X(cp[0] + left.x * len)},${Z(cp[2] + left.z * len)} L${X(cp[0] + right.x * len)},${Z(cp[2] + right.z * len)} Z" fill="rgba(0,0,0,.05)" stroke="#999" stroke-dasharray="4 4"/>`;
   const ang = Math.atan2(cd.x, -cd.z) * 180 / Math.PI;
   out += `<g transform="translate(${X(cp[0])},${Z(cp[2])}) rotate(${ang})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="#111"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="#111"/></g>`;
-  out += `<text x="${X(cp[0])}" y="${Z(cp[2]) + 32}" text-anchor="middle" font-size="12" fill="#111" font-weight="600">Camera</text>`;
+  if (inp.move) {
+    // movimento: camera di partenza e di arrivo, percorso tratteggiato con la freccia
+    const mv = inp.move;
+    const body = (p: [number, number, number], d: [number, number, number], fill: string) => {
+      const v = new THREE.Vector3(d[0], 0, d[2]).normalize();
+      const a = Math.atan2(v.x, -v.z) * 180 / Math.PI;
+      return `<g transform="translate(${X(p[0])},${Z(p[2])}) rotate(${a})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="${fill}"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="${fill}"/></g>`;
+    };
+    const sx0 = X(mv.start[0]), sz0 = Z(mv.start[2]), sx1 = X(mv.end[0]), sz1 = Z(mv.end[2]);
+    out += `<defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#d23"/></marker></defs>`;
+    if (Math.hypot(sx1 - sx0, sz1 - sz0) > 4) out += `<line x1="${sx0}" y1="${sz0}" x2="${sx1}" y2="${sz1}" stroke="#d23" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arr)"/>`;
+    out += body(mv.start, mv.startDir, '#111') + body(mv.end, mv.endDir, '#d23');
+    out += `<text x="${(sx0 + sx1) / 2}" y="${Math.max(sz0, sz1) + 34}" text-anchor="middle" font-size="12" fill="#d23" font-weight="600">${esc(mv.text)}</text>`;
+  } else out += `<text x="${X(cp[0])}" y="${Z(cp[2]) + 32}" text-anchor="middle" font-size="12" fill="#111" font-weight="600">Camera</text>`;
+  // arredi (pianta)
+  for (const f of scene.furniture || []) {
+    const k = furnitureKind(f.kind);
+    if (k.ceiling) continue;
+    const cx = X(f.position[0]), cy = Z(f.position[2]);
+    const w = k.size[0] * s, d = k.size[1] * s;
+    const rug = !!k.flat;
+    out += `<rect x="${cx - w / 2}" y="${cy - d / 2}" width="${w}" height="${d}" rx="3" transform="rotate(${-f.rotationY} ${cx} ${cy})" fill="${rug ? 'none' : '#f3f3f1'}" stroke="${rug ? '#ddd' : '#bbb'}" stroke-dasharray="${rug ? '4 3' : ''}"/>`;
+    if (!rug && !k.onTop && Math.min(w, d) > 22) out += `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="10" fill="#999">${esc(k.name)}</text>`;
+  }
+  // porte
   // oggetti
   for (const p of scene.props) {
     const r = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(p.rotationY));
@@ -162,7 +219,7 @@ export function kitRows(scene: SceneSnapshot): KitRow[] {
     return {
       n: i + 1,
       name: L.name,
-      fixture: win ? 'Finestra (luce naturale)' : `${fx.name}${L.origin === 'letta' ? ' (in scena)' : ''}`,
+      fixture: win ? 'Finestra (luce naturale)' : L.attached ? `Pratica: ${fx.name}` : `${fx.name}${L.origin === 'letta' ? ' (in scena)' : ''}`,
       output: win ? `${Math.round(effectiveLumens(L, skyLux)).toLocaleString('it-IT')} lm` : `${fx.watts} W · ${stopsLabel(L.stops)} · ${Math.round(effectiveLumens(L, skyLux)).toLocaleString('it-IT')} lm`,
       color: win ? 'Cielo' : `${effectiveKelvin(L.kelvin, L.gel)} K${fx.kelvinFixed ? '' : ''}`,
       accessories: acc.join(', ') || '—',
@@ -177,7 +234,7 @@ export function kitSummary(scene: SceneSnapshot) {
   const map = new Map<string, number>();
   for (const L of scene.lights) {
     if (L.origin !== 'aggiunta') continue;
-    const name = fixtureById(L.fixtureId).name;
+    const name = L.attached ? `${fixtureById(L.fixtureId).name} (per le pratiche)` : fixtureById(L.fixtureId).name;
     map.set(name, (map.get(name) || 0) + 1);
   }
   for (const p of scene.props) {
@@ -188,15 +245,34 @@ export function kitSummary(scene: SceneSnapshot) {
   for (const L of scene.lights) if (L.gel !== 'none') gels.set(gelById(L.gel).name, (gels.get(gelById(L.gel).name) || 0) + 1);
   for (const L of scene.lights) if (L.diffusion !== 'none') gels.set(diffusionById(L.diffusion).name, (gels.get(diffusionById(L.diffusion).name) || 0) + 1);
   let watts = 0;
-  for (const L of scene.lights) if (L.origin === 'aggiunta') watts += fixtureById(L.fixtureId).watts;
+  for (const L of scene.lights) if (L.origin === 'aggiunta' && L.on) watts += fixtureById(L.fixtureId).watts;
   return { items: [...map.entries()], filters: [...gels.entries()], watts };
+}
+
+// set chiuso: chi è nudo o in intimo (per avvisare la troupe e ridurre le persone sul set)
+export function closedSetLine(scene: SceneSnapshot) {
+  const nudo: string[] = [], intimo: string[] = [];
+  for (const p of scene.people || []) {
+    const lk = { ...defaultLook(p.figure || 'uomo', p.skin), ...(p.look || {}) };
+    const top = lk.top ?? lk.outfit ?? '', bot = lk.bottom ?? lk.outfit ?? '';
+    const noTop = !top, noBot = !bot && !WHOLE_SUITS.includes(top);
+    if (!noTop && !noBot) continue;
+    if (noBot && !lk.under) nudo.push(`${p.name} (nudo integrale)`);
+    else if (noTop && !lk.under && p.figure === 'donna') nudo.push(`${p.name} (seno nudo)`);
+    else if (lk.under && (noBot || p.figure === 'donna')) intimo.push(p.name);
+  }
+  const out: string[] = [];
+  if (nudo.length) out.push(`Set chiuso, nudo: ${nudo.join(', ')}`);
+  if (intimo.length) out.push(`${nudo.length ? 'In' : 'Set chiuso, in'} intimo: ${intimo.join(', ')}`);
+  return out.join('. ');
 }
 
 export function kitCSV(scene: SceneSnapshot) {
   const rows = kitRows(scene);
   const head = ['N.', 'Nome', 'Apparecchio', 'Uscita', 'Colore', 'Accessori', 'Posizione', 'Sul soggetto'];
   const q = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
-  return [head.map(q).join(';'), ...rows.map((r) => [r.n, r.name, r.fixture, r.output, r.color, r.accessories, r.position, r.lux].map((x) => q(String(x))).join(';'))].join('\n');
+  const cs = closedSetLine(scene);
+  return [head.map(q).join(';'), ...rows.map((r) => [r.n, r.name, r.fixture, r.output, r.color, r.accessories, r.position, r.lux].map((x) => q(String(x))).join(';')), ...(cs ? ['', q(cs)] : [])].join('\n');
 }
 
 export function cameraLine(scene: SceneSnapshot) {
@@ -214,7 +290,7 @@ export function sunLine(scene: SceneSnapshot) {
 
 const pdfText = (s: string) => s.replace(/−/g, '-').replace(/·/g, '-').replace(/—/g, '-').replace(/[’]/g, "'");
 
-export async function buildPDF(opts: { title: string; imageUrl: string; imgW: number; imgH: number; plan: PlanInput }) {
+export async function buildPDF(opts: { title: string; imageUrl: string; imgW: number; imgH: number; plan: PlanInput; frames?: { url: string; label: string }[] }) {
   const { scene } = opts.plan;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const PW = 297, PH = 210, M = 14;
@@ -234,6 +310,25 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   doc.addImage(opts.imageUrl, 'JPEG', (PW - iw) / 2, M + 16, iw, ih);
   doc.setFontSize(10); doc.setTextColor(40);
   doc.text(pdfText(`Camera: ${cameraLine(scene)}     Luce naturale: ${sunLine(scene)}`), M, PH - M);
+  if (closedSetLine(scene)) { doc.setFont('helvetica', 'bold'); doc.text(pdfText(closedSetLine(scene)), M, PH - M - 6); doc.setFont('helvetica', 'normal'); }
+  // movimento di camera: tutti i fotogrammi in fila
+  if (opts.frames && opts.frames.length > 1 && opts.plan.move) {
+    doc.addPage();
+    header(`Movimento di camera: ${opts.plan.move.text}`);
+    const n = opts.frames.length, gap = 5;
+    const cols = n <= 3 ? n : 3, rowsN = Math.ceil(n / cols);
+    const cw = (PW - M * 2 - gap * (cols - 1)) / cols;
+    const ch = Math.min(cw * opts.imgH / opts.imgW, (PH - M * 2 - 34 - (rowsN - 1) * 12) / rowsN);
+    const fw = ch * opts.imgW / opts.imgH;
+    opts.frames.forEach((f, i) => {
+      const cx = M + (i % cols) * (cw + gap) + (cw - fw) / 2, cy = M + 18 + Math.floor(i / cols) * (ch + 12);
+      doc.addImage(f.url, 'JPEG', cx, cy, fw, ch);
+      doc.setFontSize(9); doc.setTextColor(40);
+      doc.text(pdfText(`${i + 1}. ${f.label}`), cx, cy + ch + 5);
+    });
+    doc.setFontSize(10); doc.setTextColor(40);
+    doc.text(pdfText(`${opts.plan.move.text}, ${n} fotogrammi. Partenza e arrivo sono disegnati nella pianta luci.`), M, PH - M);
+  }
   // pagina 2: pianta
   doc.addPage();
   header('Pianta luci');
@@ -269,6 +364,8 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   if (sum.filters.length) { doc.text(pdfText(`Filtri e diffusioni: ${sum.filters.map(([n, q]) => `${q} × ${n}`).join(', ')}`), M, y); y += 5; }
   if (sum.watts) { doc.text(pdfText(`Potenza totale apparecchi aggiunti: ${sum.watts.toLocaleString('it-IT')} W (circa ${Math.ceil(sum.watts / 230)} A a 230 V)`), M, y); y += 5; }
   doc.text(pdfText(`Camera: ${cameraLine(scene)}`), M, y + 3);
+  const cs = closedSetLine(scene);
+  if (cs) { doc.setFont('helvetica', 'bold'); doc.text(pdfText(cs), M, y + 9); doc.setFont('helvetica', 'normal'); }
   return doc;
 }
 
