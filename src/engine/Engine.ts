@@ -2222,6 +2222,17 @@ export class Engine {
     this.ambient.visible = false;
     try {
       await new Promise((r) => setTimeout(r, 30));
+      // il path tracer mette tutte le texture in una pila di fogli della stessa misura: a 2048 px
+      // ogni foglio pesa 16 MB e con molti arredi (ognuno porta 3-4 texture) la pila superava il
+      // giga e non si creava più: arredi neri nello scatto. Fogli più piccoli quando sono tanti
+      // (le texture del catalogo sono comunque da 1024 px)
+      const tex = new Set<string>();
+      this.scene.traverse((o: any) => {
+        if (!o.isMesh || !o.visible) return;
+        for (const m of [].concat(o.material) as any[]) for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap', 'transmissionMap', 'clearcoatMap', 'clearcoatNormalMap', 'clearcoatRoughnessMap', 'iridescenceMap', 'sheenColorMap', 'sheenRoughnessMap', 'specularColorMap', 'specularIntensityMap', 'thicknessMap']) if (m && m[k]) tex.add(m[k].uuid);
+      });
+      const ts = tex.size <= 20 ? 2048 : tex.size <= 90 ? 1024 : 512;
+      this.pt.textureSize.set(ts, ts);
       this.pt.setScene(this.scene, this.camera);
     } catch (e) {
       console.error(e);
