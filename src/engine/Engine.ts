@@ -1853,7 +1853,7 @@ export class Engine {
   clearance(from: THREE.Vector3, dir: THREE.Vector3, max: number, skip = 0.15) {
     const rc = new THREE.Raycaster(from.clone().addScaledVector(dir, skip), dir.clone().normalize(), 0, max);
     (rc as any).firstHitOnly = true;
-    const occ = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj)];
+    const occ = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
     const hit = rc.intersectObjects(occ, true).sort((a, b) => a.distance - b.distance)[0];
     return hit ? hit.distance + skip : max;
   }
