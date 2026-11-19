@@ -343,3 +343,6 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 #guides .lbl:empty{display:none}
 @media (max-width:760px){#guides .lbl{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 104px);font-size:11px;max-width:92%;white-space:normal;text-align:center}}
 @media (max-width:760px){#guides.busy .lbl{display:none}}
+/* intestazione delle schede: aderisce al bordo alto anche scorrendo (computer); livello proprio contro le tracce di disegno sopra la scena */
+.pop:not(.sheet) h3{top:-16px}
+.pop h3,.pop.sheet .grab{will-change:transform}
