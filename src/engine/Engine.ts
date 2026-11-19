@@ -2495,6 +2495,80 @@ export class Engine {
     this.dirty = true;
   }
 
+  // regia: com'è l'inquadratura di adesso (taglio sulla persona, altezza, obiettivo)
+  describeShot(): { size: string; angle: string; lens: string; text: string } {
+    const c = this.cam;
+    const sensor = SENSORS.find((x) => x.id === (c?.sensor || 's35')) || SENSORS[0];
+    const focal = Math.round(c?.focal || 24);
+    const eq = focal * (36 / sensor.width);
+    const lens = `${focal} mm${eq < 27 ? ' grandangolo' : eq > 80 ? ' tele' : ''}`;
+    this.camera.updateMatrixWorld();
+    const fr = this.frameRect;
+    const fy0 = fr.y0 * 2 - 1, fy1 = fr.y1 * 2 - 1, fx0 = fr.x0 * 2 - 1, fx1 = fr.x1 * 2 - 1;
+    const ndc = (v: THREE.Vector3) => v.clone().project(this.camera);
+    const inFront = (v: THREE.Vector3) => v.clone().applyMatrix4(this.camera.matrixWorldInverse).z < -0.05;
+    // la persona inquadrata più vicina
+    let best: { id: string; d: number } | null = null;
+    for (const [id] of this.people) {
+      const h = this.jointWorld(id, 'head');
+      if (!h || !inFront(h)) continue;
+      const n = ndc(h);
+      if (n.x < fx0 || n.x > fx1 || n.y < fy0 - 0.25 || n.y > fy1 + 0.6) continue;
+      const d = h.distanceTo(this.camera.position);
+      if (!best || d < best.d) best = { id, d };
+    }
+    const pitch = THREE.MathUtils.radToDeg(this.pitch);
+    let size = '', angle = '';
+    if (best) {
+      const J = (n: string) => this.jointWorld(best!.id, n);
+      const head = J('head')!, chest = J('chest'), hips = J('hips'), knee = J('knee_l'), ankle = J('ankle_l');
+      const top = head.clone().add(new THREE.Vector3(0, 0.14, 0));
+      const chin = head.clone().add(new THREE.Vector3(0, -0.07, 0));
+      const lows = [ankle, J('ankle_r'), J('knee_r'), knee, hips].filter(Boolean) as THREE.Vector3[];
+      const feet = new THREE.Vector3(head.x, Math.max(0, Math.min(...lows.map((v) => v.y)) - 0.08), head.z);
+      const y = (v: THREE.Vector3 | null) => (v && inFront(v) ? ndc(v).y : -9);
+      const yb = fy0;
+      const yt = y(top), yf = y(feet);
+      if (yb <= yf) {
+        const frac = (yt - yf) / (fy1 - fy0);
+        size = frac > 0.55 ? 'Figura intera' : frac > 0.22 ? 'Campo medio' : 'Campo lungo';
+      } else if (yb < y(knee)) size = 'Piano americano';
+      else if (yb < y(hips ? hips.clone().add(new THREE.Vector3(0, 0.08, 0)) : null)) size = 'Mezza figura';
+      else if (yb < y(chest)) size = 'Primo piano';
+      else if (yb < y(chin) || yt < fy1) size = 'Primissimo piano';
+      else size = 'Dettaglio';
+      const eye = head.y + 0.03;
+      const dy = this.camera.position.y - eye;
+      angle = pitch < -55 ? 'a picco' : dy > 0.35 || pitch < -18 ? "dall'alto" : dy < -0.35 || pitch > 15 ? 'dal basso' : 'altezza occhi';
+    } else angle = pitch < -55 ? 'a picco' : pitch < -18 ? "dall'alto" : pitch > 15 ? 'dal basso' : '';
+    const text = [size, angle, lens].filter(Boolean).join(' · ');
+    return { size, angle, lens, text };
+  }
+
+  // regia: la stessa inquadratura vista con obiettivi diversi (anteprima veloce)
+  lensStrip(focals: number[], width = 360): { focal: number; url: string; text: string }[] {
+    const s = this.snapshot;
+    if (!s || this.shot) return [];
+    const prev = s.cam;
+    const out: { focal: number; url: string; text: string }[] = [];
+    try {
+      for (const f of focals) {
+        s.cam = { ...prev, focal: f };
+        this.updateLens();
+        const cv = this.grabPreview();
+        const t = document.createElement('canvas');
+        t.width = width; t.height = Math.max(2, Math.round((width * cv.height) / cv.width));
+        t.getContext('2d')!.drawImage(cv, 0, 0, t.width, t.height);
+        out.push({ focal: f, url: t.toDataURL('image/jpeg', 0.82), text: this.describeShot().size });
+      }
+    } finally {
+      s.cam = prev;
+      this.updateLens();
+      this.dirty = true;
+    }
+    return out;
+  }
+
   // anteprima: copia il canvas corrente (inquadratura)
   grabPreview(): HTMLCanvasElement {
     this.dirty = true;

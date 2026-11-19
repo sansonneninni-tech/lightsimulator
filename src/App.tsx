@@ -19,6 +19,7 @@ import { newId } from './engine/photometry';
 import * as THREE from 'three';
 import { shootOnce } from './shoot';
 import { quickView } from './ui/views';
+import { Guides, LensStrip } from './ui/Regia';
 
 const FC_LEGEND: [string, string][] = [['#730f99', 'Nero'], ['#1a40f2', '−4'], ['#3fbf3f', '18%'], ['#f28cad', 'Pelle'], ['#ffe61a', '+3'], ['#f21a1a', 'Bruciato']];
 
@@ -204,6 +205,7 @@ export default function App() {
         e.preventDefault(); removeSelection(); return;
       }
       if (e.key === '+' || e.key === '=') { addLight('Pannello'); return; }
+      if (e.key.toLowerCase() === 'g' && !mod) { useStore.setState({ guides: !s.guides }); return; }
       if (e.key.toLowerCase() === 'f' && !mod) { eng()?.resetView(); return; }
       if (!mod && (e.key === '1' || e.key === '2' || e.key === '3')) { quickView(e.key === '1' ? 'pianta' : e.key === '2' ? 'camera' : 'viso'); return; }
     };
@@ -312,6 +314,7 @@ export default function App() {
           ) : help && (
             <div id="help" className="chrome">Trascina: guardati intorno · tasto destro o Alt: gira attorno<br />Rotella: avvicinati · Maiusc + trascina: spostati<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · 1 2 3: pianta, camera, viso</div>
           )}
+          <Guides />
           <Roll />
           <SelectionCard />
           {panel === 'room' && <RoomPanel onClose={() => setPanel(null)} />}
@@ -321,6 +324,7 @@ export default function App() {
           {panel === 'sky' && <SkyPanel onClose={() => setPanel(null)} />}
           {panel === 'place' && <PlaceMenu onClose={() => setPanel(null)} onNew={() => useStore.setState({ phase: 'empty', selection: null, manikin: null })} onSave={saveProject} onOpen={() => projRef.current?.click()} />}
           <Viewer />
+          <LensStrip />
           <Creator />
         </>
       )}

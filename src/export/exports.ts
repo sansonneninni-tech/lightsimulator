@@ -1,7 +1,7 @@
 // Esportazioni: pianta luci (SVG/PNG), lista materiale (tabella/CSV), PDF troupe.
 import * as THREE from 'three';
 import { jsPDF } from 'jspdf';
-import type { SceneSnapshot } from '../store';
+import type { SceneSnapshot, Shot } from '../store';
 import { furnitureKind } from '../engine/furniture';
 import {
   LightState, fixtureById, effectiveLumens, lightColor, spotAngles, gelById, diffusionById, effectiveKelvin,
@@ -366,6 +366,41 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   doc.text(pdfText(`Camera: ${cameraLine(scene)}`), M, y + 3);
   const cs = closedSetLine(scene);
   if (cs) { doc.setFont('helvetica', 'bold'); doc.text(pdfText(cs), M, y + 9); doc.setFont('helvetica', 'normal'); }
+  return doc;
+}
+
+// storyboard: tutti gli scatti del rullino in ordine, numerati, con taglio, obiettivo e luce
+export function buildStoryboard(title: string, shots: Shot[]) {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const PW = 297, PH = 210, M = 14, gap = 7, cols = 3, rowsN = 2, per = cols * rowsN;
+  const date = new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+  const pages = Math.max(1, Math.ceil(shots.length / per));
+  const cw = (PW - M * 2 - gap * (cols - 1)) / cols;
+  const cellH = (PH - M * 2 - 22 - gap * (rowsN - 1)) / rowsN;
+  for (let p = 0; p < pages; p++) {
+    if (p) doc.addPage();
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(17);
+    doc.text(pdfText(title), M, M + 4);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(110);
+    doc.text(pdfText(`Storyboard  -  ${shots.length} inquadrature  -  ${date}`), M, M + 10);
+    doc.text(pdfText(`Light Simulator  -  ${p + 1}/${pages}`), PW - M, M + 4, { align: 'right' });
+    shots.slice(p * per, p * per + per).forEach((s, k) => {
+      const i = p * per + k;
+      const x = M + (k % cols) * (cw + gap), y = M + 18 + Math.floor(k / cols) * (cellH + gap);
+      const ih = Math.min(cellH - 15, (cw * s.height) / s.width), iw = (ih * s.width) / s.height;
+      doc.addImage(s.url, 'JPEG', x + (cw - iw) / 2, y, iw, ih);
+      doc.setDrawColor(200); doc.rect(x + (cw - iw) / 2, y, iw, ih);
+      const ty = y + ih + 5;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(17);
+      const head = `${i + 1}`;
+      doc.text(head, x, ty);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(40);
+      const what = s.move ? `${s.desc || ''}${s.desc ? ' - ' : ''}${s.move.text}, ${s.move.label}` : s.desc || '';
+      doc.text(pdfText(what), x + 7, ty, { maxWidth: cw - 7 });
+      doc.setFontSize(7.5); doc.setTextColor(120);
+      doc.text(pdfText(`${cameraLine(s.scene)}  -  ${sunLine(s.scene)}`), x + 7, ty + 4.5, { maxWidth: cw - 7 });
+    });
+  }
   return doc;
 }
 

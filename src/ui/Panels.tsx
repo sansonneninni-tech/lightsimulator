@@ -120,6 +120,7 @@ function DragValue<T>({ values, value, fmt, onChange }: { values: T[]; value: T;
 export function CameraPanel({ onClose }: { onClose: () => void }) {
   const cam = useStore((s) => s.cam);
   const meter = useStore((s) => s.meter);
+  const guides = useStore((s) => s.guides);
   const a = dockAnchor();
   const set = (p: any) => useStore.setState({ cam: { ...useStore.getState().cam, ...p } });
   const hasPhoto = useStore((s) => !!s.recon);
@@ -137,6 +138,7 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
       </div>
       <div className="hint" style={{ margin: '4px 0 14px' }}>Trascina un valore a destra o a sinistra, o toccalo per il successivo. Il fuoco automatico segue la persona inquadrata o il centro.</div>
       <div className="line"><span>False color</span><div className={`toggle ${cam.falseColor ? 'on' : ''}`} onClick={() => set({ falseColor: !cam.falseColor })} /></div>
+      <div className="line"><span>Guide di inquadratura{!TOUCH && <span style={{ color: 'var(--t3)' }}> · tasto G</span>}</span><div className={`toggle ${guides ? 'on' : ''}`} onClick={() => useStore.setState({ guides: !guides })} /></div>
       <div className="line"><span>Esposimetro: tocca un punto della scena</span><div className={`toggle ${meter ? 'on' : ''}`} onClick={() => { useStore.setState({ meter: !meter, meterPin: null }); if (!meter) useStore.getState().showToast('Tocca un punto: ti dico lux e diaframma.'); }} /></div>
       <div className="row">
         <div className="k"><span>Formato</span></div>
@@ -149,6 +151,7 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
       <MoveRow onClose={onClose} />
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
+        <button className="btn" onClick={() => { onClose(); useStore.setState({ lensStrip: true }); }}>Confronta obiettivi</button>
         <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e && hasPhoto) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>{hasPhoto ? "Torna all'inquadratura della foto" : 'Torna alla vista iniziale'}</button>
       </div>
       <div className="hint">{TOUCH ? 'Muoviti nella stanza: un dito per guardare, pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), due dita per spostarti di lato.' : 'Muoviti nella stanza: trascina per guardare, rotella o pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), W A S D per camminare, Q E per scendere e salire, tasto destro o due dita per spostarti di lato.'}</div>

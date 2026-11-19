@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { useStore, Shot } from '../store';
 import { eng } from '../engineRef';
 import { roomBounds, windowInfos } from '../engine/room';
-import { planSVG, svgToCanvas, kitRows, kitSummary, kitCSV, closedSetLine, buildPDF, download, slug, cameraLine, sunLine, PlanInput } from '../export/exports';
+import { planSVG, svgToCanvas, kitRows, kitSummary, kitCSV, closedSetLine, buildPDF, buildStoryboard, download, slug, cameraLine, sunLine, PlanInput } from '../export/exports';
 
 export function Roll() {
   const shots = useStore((s) => s.shots);
@@ -37,7 +37,7 @@ export function Viewer() {
   const shots = useStore((s) => s.shots);
   const place = useStore((s) => s.placeName);
   const shot = shots.find((s) => s.id === id);
-  const [tab, setTab] = useState<'img' | 'plan' | 'kit' | 'pdf'>('img');
+  const [tab, setTab] = useState<'img' | 'plan' | 'kit' | 'pdf' | 'board'>('img');
   const [busy, setBusy] = useState(false);
   useEffect(() => { setTab('img'); }, [id]);
   useEffect(() => {
@@ -59,6 +59,7 @@ export function Viewer() {
       if (tab === 'img') download(shot.url, `${base}.jpg`);
       if (tab === 'plan') { const c = await svgToCanvas(svg, 2); download(c.toDataURL('image/png'), `${base}-pianta-luci.png`); }
       if (tab === 'kit') download(URL.createObjectURL(new Blob(['﻿' + kitCSV(shot.scene)], { type: 'text/csv' })), `${base}-lista-materiale.csv`);
+      if (tab === 'board') buildStoryboard(place, shots).save(`${slug(place)}-storyboard.pdf`);
       if (tab === 'pdf') { const doc = await buildPDF({ title: place, imageUrl: shot.url, imgW: shot.width, imgH: shot.height, plan: inp, frames: group.map((g) => ({ url: g.url, label: g.move!.label })) }); doc.save(`${base}-troupe.pdf`); }
     } finally { setBusy(false); }
   };
@@ -82,6 +83,16 @@ export function Viewer() {
             </div>
           </div>
         )}
+        {tab === 'board' && (
+          <div className="board">
+            {shots.map((s, i) => (
+              <figure key={s.id}>
+                <img src={s.url} alt={`Inquadratura ${i + 1}`} onClick={() => { useStore.setState({ viewer: s.id }); setTab('img'); }} />
+                <figcaption><b>{i + 1}</b>{s.desc || cameraLine(s.scene)}{s.move && <span> · {s.move.text}, {s.move.label}</span>}</figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
         {tab === 'pdf' && (
           <div style={{ color: 'var(--t2)', textAlign: 'center', lineHeight: 1.8, padding: 24 }}>
             Il PDF troupe unisce scatto, pianta luci e lista materiale in un solo documento A4.<br />
@@ -99,9 +110,10 @@ export function Viewer() {
         <button className={tab === 'plan' ? 'on' : ''} onClick={() => setTab('plan')}>Pianta luci</button>
         <button className={tab === 'kit' ? 'on' : ''} onClick={() => setTab('kit')}>Lista materiale</button>
         <button className={tab === 'pdf' ? 'on' : ''} onClick={() => setTab('pdf')}>PDF troupe</button>
+        <button className={tab === 'board' ? 'on' : ''} onClick={() => setTab('board')}>Storyboard</button>
         <button className="dl" onClick={dl} disabled={busy}>{busy ? 'Preparo…' : 'Scarica'}</button>
       </div>
-      <div className="meta num">{shot.move ? `${shot.move.text} · fotogramma ${shot.move.frame + 1} di ${shot.move.of} · ` : ''}{shot.width} × {shot.height} · {cameraLine(shot.scene)}</div>
+      <div className="meta num">{tab === 'board' ? `${shots.length} inquadrature in ordine di scatto · Scarica crea il PDF dello storyboard · ` : ''}{shot.desc ? `${shot.desc} · ` : ''}{shot.move ? `${shot.move.text} · fotogramma ${shot.move.frame + 1} di ${shot.move.of} · ` : ''}{shot.width} × {shot.height} · {cameraLine(shot.scene)}</div>
     </div>
   );
 }
