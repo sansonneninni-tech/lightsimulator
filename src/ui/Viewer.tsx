@@ -32,6 +32,19 @@ function planInput(shot: Shot): PlanInput | null {
   return { scene: shot.scene, recon, camera: { position: pos as any, dir: dir as any, hfov }, move };
 }
 
+// posizioni di camera di tutti gli scatti (le vicine si uniscono: "1, 3")
+export function setupsOf(shots: Shot[]) {
+  const out: { position: [number, number, number]; dir: [number, number, number]; label: string; n: number[] }[] = [];
+  shots.forEach((s, i) => {
+    const p = (s as any).camPos as [number, number, number] | undefined, d = (s as any).camDir as [number, number, number] | undefined;
+    if (!p || !d) return;
+    const same = out.find((c) => Math.hypot(c.position[0] - p[0], c.position[2] - p[2]) < 0.25 && c.dir[0] * d[0] + c.dir[2] * d[2] > 0.9 * Math.hypot(c.dir[0], c.dir[2]) * Math.hypot(d[0], d[2]));
+    if (same) same.n.push(i + 1); else out.push({ position: p, dir: d, label: '', n: [i + 1] });
+  });
+  out.forEach((c) => { c.label = c.n.length > 3 ? `${c.n[0]}–${c.n[c.n.length - 1]}` : c.n.join(', '); });
+  return out;
+}
+
 export function Viewer() {
   const id = useStore((s) => s.viewer);
   const shots = useStore((s) => s.shots);
@@ -59,7 +72,7 @@ export function Viewer() {
       if (tab === 'img') download(shot.url, `${base}.jpg`);
       if (tab === 'plan') { const c = await svgToCanvas(svg, 2); download(c.toDataURL('image/png'), `${base}-pianta-luci.png`); }
       if (tab === 'kit') download(URL.createObjectURL(new Blob(['﻿' + kitCSV(shot.scene)], { type: 'text/csv' })), `${base}-lista-materiale.csv`);
-      if (tab === 'board') buildStoryboard(place, shots).save(`${slug(place)}-storyboard.pdf`);
+      if (tab === 'board') (await buildStoryboard(place, shots, { ...inp, setups: setupsOf(shots) })).save(`${slug(place)}-storyboard.pdf`);
       if (tab === 'pdf') { const doc = await buildPDF({ title: place, imageUrl: shot.url, imgW: shot.width, imgH: shot.height, plan: inp, frames: group.map((g) => ({ url: g.url, label: g.move!.label })) }); doc.save(`${base}-troupe.pdf`); }
     } finally { setBusy(false); }
   };

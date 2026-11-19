@@ -19,6 +19,8 @@ export interface PlanInput {
   camera: { position: [number, number, number]; dir: [number, number, number]; hfov: number };
   // movimento di camera: posizione e direzione finali, descrizione
   move?: { start: [number, number, number]; startDir: [number, number, number]; end: [number, number, number]; endDir: [number, number, number]; text: string };
+  // storyboard: tutte le posizioni di camera, numerate come le inquadrature
+  setups?: { position: [number, number, number]; dir: [number, number, number]; label: string }[];
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -45,7 +47,7 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
   const ext = scene.room?.outdoor ? scene.room : null;
   const set = { x0, z0, x1, z1 };
   if (ext) {
-    const pts: number[][] = [camera.position, ...scene.lights.map((L) => L.position), ...scene.people.map((p) => p.position), ...(scene.furniture || []).map((f) => f.position)];
+    const pts: number[][] = [camera.position, ...(inp.setups || []).map((c) => c.position), ...scene.lights.map((L) => L.position), ...scene.people.map((p) => p.position), ...(scene.furniture || []).map((f) => f.position)];
     for (const p of pts) { x0 = Math.min(x0, p[0] - 1.5); x1 = Math.max(x1, p[0] + 1.5); z0 = Math.min(z0, p[2] - 1.5); z1 = Math.max(z1, p[2] + 1.5); }
     x0 -= 1; x1 += 1; z0 -= 3; z1 += 1;
   }
@@ -93,14 +95,27 @@ export function planSVG(inp: PlanInput, opts: { width?: number; height?: number 
     out += `<line x1="${X(a.x)}" y1="${Z(a.z)}" x2="${X(b.x)}" y2="${Z(b.z)}" stroke="#fff" stroke-width="7"/>`;
     out += `<line x1="${X(a.x)}" y1="${Z(a.z)}" x2="${X(b.x)}" y2="${Z(b.z)}" stroke="#6aa9ff" stroke-width="3"/>`;
   }
+  if (inp.setups?.length) {
+    // pianta delle inquadrature: una camera per posizione, con i numeri delle inquadrature
+    for (const c of inp.setups) {
+      const v = new THREE.Vector3(c.dir[0], 0, c.dir[2]);
+      if (v.lengthSq() < 1e-6) v.set(0, 0, -1);
+      v.normalize();
+      const a = Math.atan2(v.x, -v.z) * 180 / Math.PI;
+      const cx = X(c.position[0]), cz = Z(c.position[2]);
+      out += `<line x1="${cx}" y1="${cz}" x2="${cx + v.x * 1.1 * s}" y2="${cz + v.z * 1.1 * s}" stroke="#d23" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+      out += `<g transform="translate(${cx},${cz}) rotate(${a})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="#111"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="#111"/></g>`;
+      out += `<text x="${cx}" y="${cz + 32}" text-anchor="middle" font-size="12.5" fill="#d23" font-weight="700">${esc(c.label)}</text>`;
+    }
+  }
   // camera
   const cp = camera.position, cd = new THREE.Vector3(camera.dir[0], 0, camera.dir[2]).normalize();
   const half = camera.hfov / 2, len = Math.min(3, (z1 - z0) * 0.6);
   const left = cd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), half), right = cd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -half);
-  out += `<path d="M${X(cp[0])},${Z(cp[2])} L${X(cp[0] + left.x * len)},${Z(cp[2] + left.z * len)} L${X(cp[0] + right.x * len)},${Z(cp[2] + right.z * len)} Z" fill="rgba(0,0,0,.05)" stroke="#999" stroke-dasharray="4 4"/>`;
+  if (!inp.setups?.length) out += `<path d="M${X(cp[0])},${Z(cp[2])} L${X(cp[0] + left.x * len)},${Z(cp[2] + left.z * len)} L${X(cp[0] + right.x * len)},${Z(cp[2] + right.z * len)} Z" fill="rgba(0,0,0,.05)" stroke="#999" stroke-dasharray="4 4"/>`;
   const ang = Math.atan2(cd.x, -cd.z) * 180 / Math.PI;
-  out += `<g transform="translate(${X(cp[0])},${Z(cp[2])}) rotate(${ang})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="#111"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="#111"/></g>`;
-  if (inp.move) {
+  if (!inp.setups?.length) out += `<g transform="translate(${X(cp[0])},${Z(cp[2])}) rotate(${ang})"><rect x="-11" y="-2" width="22" height="16" rx="3" fill="#111"/><path d="M-6,-2 L6,-2 L9,-9 L-9,-9 Z" fill="#111"/></g>`;
+  if (inp.setups?.length) { /* già disegnate */ } else if (inp.move) {
     // movimento: camera di partenza e di arrivo, percorso tratteggiato con la freccia
     const mv = inp.move;
     const body = (p: [number, number, number], d: [number, number, number], fill: string) => {
@@ -370,7 +385,7 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
 }
 
 // storyboard: tutti gli scatti del rullino in ordine, numerati, con taglio, obiettivo e luce
-export function buildStoryboard(title: string, shots: Shot[]) {
+export async function buildStoryboard(title: string, shots: Shot[], plan?: PlanInput | null) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const PW = 297, PH = 210, M = 14, gap = 7, cols = 3, rowsN = 2, per = cols * rowsN;
   const date = new Date().toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -400,6 +415,17 @@ export function buildStoryboard(title: string, shots: Shot[]) {
       doc.setFontSize(7.5); doc.setTextColor(120);
       doc.text(pdfText(`${cameraLine(s.scene)}  -  ${sunLine(s.scene)}`), x + 7, ty + 4.5, { maxWidth: cw - 7 });
     });
+  }
+  if (plan?.setups?.length) {
+    doc.addPage();
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(17);
+    doc.text(pdfText(title), M, M + 4);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(110);
+    doc.text(pdfText(`Pianta delle inquadrature  -  i numeri sono quelli dello storyboard  -  ${date}`), M, M + 10);
+    const svg = planSVG(plan, { width: 1000, height: 640 });
+    const pc = await svgToCanvas(svg, 2);
+    const pr = Math.min((PW - M * 2) / 1000, (PH - M * 2 - 20) / 640);
+    doc.addImage(pc.toDataURL('image/png'), 'PNG', (PW - 1000 * pr) / 2, M + 16, 1000 * pr, 640 * pr);
   }
   return doc;
 }
