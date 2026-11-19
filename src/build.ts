@@ -372,7 +372,7 @@ export function addFurniture(kind: string) {
     // sul pavimento, al centro dell'inquadratura (non oltre la parete)
     const r = e.renderer.domElement.getBoundingClientRect();
     const hit = e.rayPlane(r.left + r.width / 2, r.top + r.height * 0.68, new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
-    const d = hit ? Math.min(3, Math.max(1.4, hit.distanceTo(e.camera.position.clone().setY(0)))) : 2;
+    const d = hit ? Math.min(4, Math.max(2.2, hit.distanceTo(e.camera.position.clone().setY(0)))) : 2.6;
     pos = e.camera.position.clone().setY(0).addScaledVector(fwd, d + Math.max(k.size[0], k.size[1]) * 0.25);
     rot = Math.round(THREE.MathUtils.radToDeg(Math.atan2(-fwd.x, -fwd.z)) / 15) * 15;
   }
