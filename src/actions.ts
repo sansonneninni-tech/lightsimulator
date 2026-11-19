@@ -98,7 +98,7 @@ export function addLight(type: string, at?: THREE.Vector3) {
     // compare dentro la vista, nel terzo superiore centrale, già puntata sul soggetto
     const r = e.renderer.domElement.getBoundingClientRect();
     const d = camPos.distanceTo(subject);
-    const ray = e.rayPlane(r.left + r.width * (0.5 + side * 0.12), r.top + r.height * 0.4, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(0.9, Math.min(d - 0.8, d * 0.55)))));
+    const ray = e.rayPlane(r.left + r.width * (0.5 + side * (r.width < r.height ? 0.2 : 0.24)), r.top + r.height * 0.38, new THREE.Plane(toCam.clone().negate(), 0).translate(camPos.clone().addScaledVector(toCam, -Math.max(1.4, Math.min(d - 0.6, d * 0.8)))));
     if (ray) pos = ray;
   }
   // nasce dentro la stanza, all'altezza di uno stativo, mai attaccata al soffitto
@@ -140,11 +140,12 @@ export function addPerson(pose: PoseId) {
   if (e) {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion); fwd.y = 0; fwd.normalize();
     const r = e.renderer.domElement.getBoundingClientRect();
-    const hit = e.raycast(r.left + r.width / 2, r.top + r.height * 0.7);
-    const maxD = hit ? Math.max(1.2, hit.point.clone().setY(0).distanceTo(e.camera.position.clone().setY(0)) - 0.4) : 3;
-    const d = Math.min(2.6, maxD);
+    // abbastanza lontana da entrare intera nell'inquadratura, ma prima di pareti e mobili davanti
+    const hit = e.rayPlane(r.left + r.width / 2, r.top + r.height * 0.66, new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
+    const flat = hit ? hit.clone().setY(0).distanceTo(e.camera.position.clone().setY(0)) : 3;
+    const d = Math.max(2.5, Math.min(3.4, flat));
     pos = e.camera.position.clone().addScaledVector(fwd, d);
-    const offset = new THREE.Vector3(-fwd.z, 0, fwd.x).multiplyScalar((s.people.length % 3 - 1) * 0.8);
+    const offset = new THREE.Vector3(-fwd.z, 0, fwd.x).multiplyScalar([0, 0.8, -0.8][s.people.length % 3] * (r.width < r.height ? 0.6 : 1));
     pos.add(offset);
     pos.y = 0;
     rotY = THREE.MathUtils.radToDeg(Math.atan2(-fwd.x, -fwd.z));
