@@ -227,7 +227,7 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 .pop.sheet.full .hint{display:block}
 .pop.sheet .grab .x{position:absolute;right:4px;top:0;width:40px;height:32px;border:0;background:none;color:var(--t2);font-size:22px;line-height:28px;cursor:pointer}
 .pop.sheet h3{top:28px;margin-top:-6px;min-height:34px;border-radius:0}
-@media (max-width:600px){#dock{transition:opacity .2s,transform .2s var(--ease)}body.sheet-open #dock{opacity:0;pointer-events:none;transform:translateX(-50%) translateY(24px)}}
+@media (max-width:600px){#dock{transition:opacity .2s,transform .2s var(--ease),visibility 0s}body.sheet-open #dock{opacity:0;visibility:hidden;pointer-events:none;transform:translateX(-50%) translateY(24px);transition:opacity .2s,transform .2s var(--ease),visibility 0s .2s}}
 @keyframes sheetup{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
 .pop.sheet .grab{position:sticky;top:0;z-index:3;height:28px;margin:0 -16px 6px;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none}
 .pop.sheet .grab i{width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.4)}

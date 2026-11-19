@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { LightState, fixtureById, lightColor, spotAngles } from './photometry';
 
-const METAL = new THREE.MeshStandardMaterial({ color: 0x2a2b2e, roughness: 0.45, metalness: 0.6 });
+const METAL = new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.55, metalness: 0.15 });
 const noRay = () => {};
 
 type Rig = { g: THREE.Group; key: string; head: THREE.Group; lens: THREE.Mesh; stand: THREE.Mesh; legs: THREE.Group; ring: THREE.Mesh; beam: THREE.Mesh | null; lensMat: THREE.MeshBasicMaterial; ringMat: THREE.MeshBasicMaterial; beamMat: THREE.MeshBasicMaterial | null };
