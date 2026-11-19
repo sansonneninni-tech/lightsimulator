@@ -7,7 +7,7 @@ import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLigh
 import type { Reconstruction } from './reconstruct';
 import {
   LightState, fixtureById, effectiveLumens, diffusionById, lightColor, spotAngles, spotCandela, illuminanceAt,
-  ev100, exposureFromEV100, ISO_VALUES, FSTOPS, SENSORS, ASPECTS, fStopForLux,
+  ev100, exposureFromEV100, ISO_VALUES, FSTOPS, SENSORS, ASPECTS, fStopForLux, LOOKS,
 } from './photometry';
 import { PersonState, buildMannequin, applyPose } from './mannequin';
 import { SunState, sunDirection, sunSky } from './sun';
@@ -30,7 +30,7 @@ const linToSrgb = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(
 const QUAD_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const QUAD_FRAG = `
 precision highp float;
-uniform sampler2D tDiffuse; uniform float exposure; uniform int falseColor; uniform vec4 frame; uniform float maskAlpha;
+uniform sampler2D tDiffuse; uniform float exposure; uniform int falseColor; uniform int look; uniform vec4 frame; uniform float maskAlpha;
 uniform sampler2D tPhoto; uniform sampler2D tBase; uniform sampler2D tCur; uniform sampler2D tMask;
 uniform sampler2D tAdd; uniform float addW;
 uniform float relightW; uniform float photoK; uniform vec2 texel; uniform mat4 invProj; uniform mat3 camRot; uniform mat3 photoRotInv; uniform mat4 photoProj;
@@ -49,6 +49,36 @@ vec3 neutral(vec3 color){
   return mix(color, vec3(newPeak), g);
 }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(vec3(0.0031308), c)); }
+float lumaOf(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 sCurve(vec3 x, float k){ return clamp(x + k * x * (1.0 - x) * (2.0 * x - 1.0), 0.0, 1.0); }
+float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+// look di camera, nello spazio del monitor (uguale in anteprima e nello scatto)
+vec3 applyLook(vec3 s, int lk){
+  float y = lumaOf(s);
+  if (lk == 1) { // pellicola: curva da stampa, ombre fredde, alte luci calde, nero appena aperto, grana
+    s = sCurve(s, 0.55);
+    s = mix(s, vec3(lumaOf(s)), 0.12);
+    s += vec3(-0.012, 0.004, 0.022) * (1.0 - y) + vec3(0.035, 0.012, -0.03) * y;
+    s = s * 0.95 + 0.025;
+    s += (hash(gl_FragCoord.xy) - 0.5) * 0.035 * (1.0 - abs(y - 0.5));
+  } else if (lk == 2) { // teal & orange: incarnati caldi, ombre e fondi verso il ciano
+    float warm = clamp((s.r - s.b) * 2.5, 0.0, 1.0);
+    vec3 teal = vec3(0.0, 0.035, 0.06) * (1.0 - y) * (1.0 - warm);
+    vec3 orange = vec3(0.05, 0.015, -0.04) * warm * y;
+    s = sCurve(s + teal + orange - vec3(0.02, 0.0, 0.0) * (1.0 - warm) * (1.0 - y), 0.35);
+    s = mix(vec3(lumaOf(s)), s, 1.12);
+  } else if (lk == 3) { // bleach bypass: argento lasciato, colore spento e contrasto duro
+    s = mix(s, vec3(y), 0.55);
+    s = sCurve(s, 0.9);
+  } else if (lk == 4) { // bianco e nero (filtro giallo: cieli un po' più scuri)
+    float g = dot(s, vec3(0.32, 0.6, 0.08));
+    s = sCurve(vec3(g), 0.5);
+  } else if (lk == 5) { // notte americana: due stop sotto, blu, poco colore, alte luci contenute
+    s = mix(s, vec3(y), 0.6) * vec3(0.55, 0.72, 1.0) * 0.6;
+    s = pow(max(s, 0.0), vec3(1.1));
+  }
+  return clamp(s, 0.0, 1.0);
+}
 void main(){
   vec3 scene = texture2D(tDiffuse, vUv).rgb;
   if (relightW > 0.0) {
@@ -81,7 +111,10 @@ void main(){
   if (addW > 0.0) scene += texture2D(tAdd, vUv).rgb * addW;
   vec3 c = max(scene * exposure, 0.0);
   vec3 s = toSRGB(clamp(neutral(c), 0.0, 1.0));
+  vec3 s0 = s;
+  if (look > 0) s = applyLook(s, look);
   if (falseColor == 1) {
+    s = s0;
     float y = dot(s, vec3(0.2126, 0.7152, 0.0722)) * 100.0;
     vec3 g = vec3(dot(s, vec3(0.2126, 0.7152, 0.0722))) * 0.8 + 0.05;
     if (y < 2.5) g = vec3(0.45, 0.05, 0.6);
@@ -245,7 +278,7 @@ export class Engine {
     this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4, colorSpace: THREE.LinearSRGBColorSpace });
     this.quadMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT, fragmentShader: QUAD_FRAG, depthTest: false, depthWrite: false,
-      uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 },
+      uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, look: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 },
         tPhoto: { value: null }, tBase: { value: null }, tCur: { value: null }, tMask: { value: null }, tAdd: { value: null }, addW: { value: 0 }, relightW: { value: 0 }, photoK: { value: 1 }, texel: { value: new THREE.Vector2(0.001, 0.001) },
         invProj: { value: new THREE.Matrix4() }, camRot: { value: new THREE.Matrix3() }, photoRotInv: { value: new THREE.Matrix3() }, photoProj: { value: new THREE.Matrix4() } },
     });
@@ -854,6 +887,7 @@ export class Engine {
     this.updateIndirect();
     this.syncPropLights();
     this.quadMat.uniforms.falseColor.value = s.cam.falseColor ? 1 : 0;
+    this.quadMat.uniforms.look.value = Math.max(0, LOOKS.findIndex((l) => l.id === (s.cam.look || 'neutro')));
     this.dirty = true;
   }
 
@@ -1815,6 +1849,15 @@ export class Engine {
   }
 
   // lettura dell'esposimetro sulla superficie dove punta una luce (tutte le luci, con le ombre)
+  // spazio libero da un punto in una direzione (pareti, arredi, persone): per spostare una luce lungo il fascio
+  clearance(from: THREE.Vector3, dir: THREE.Vector3, max: number, skip = 0.15) {
+    const rc = new THREE.Raycaster(from.clone().addScaledVector(dir, skip), dir.clone().normalize(), 0, max);
+    (rc as any).firstHitOnly = true;
+    const occ = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj), ...[...this.props.values()].map((x) => x.obj)];
+    const hit = rc.intersectObjects(occ, true).sort((a, b) => a.distance - b.distance)[0];
+    return hit ? hit.distance + skip : max;
+  }
+
   aimReading(L: { position: [number, number, number]; target: [number, number, number]; attached?: string }) {
     if (!this.snapshot) return null;
     const from = new THREE.Vector3(...L.position), to = new THREE.Vector3(...L.target);
@@ -1868,7 +1911,7 @@ export class Engine {
     if (this.outdoor) lux += this.skyIrradiance(p, hit.normal, s.sun);
     const c = s.cam;
     const fs = fStopForLux(lux, c.shutter, c.iso);
-    return { lux, fStop: fs, point: hit.point, stops: Math.log2(fs / c.fStop) * 2 };
+    return { lux, fStop: fs, point: hit.point, normal: hit.normal, stops: Math.log2(fs / c.fStop) * 2 };
   }
 
   // ---------------- loop ----------------
@@ -2493,6 +2536,80 @@ export class Engine {
     this.renderer.toneMappingExposure = 1;
     this.shot = null;
     this.dirty = true;
+  }
+
+  // regia: com'è l'inquadratura di adesso (taglio sulla persona, altezza, obiettivo)
+  describeShot(): { size: string; angle: string; lens: string; text: string } {
+    const c = this.cam;
+    const sensor = SENSORS.find((x) => x.id === (c?.sensor || 's35')) || SENSORS[0];
+    const focal = Math.round(c?.focal || 24);
+    const eq = focal * (36 / sensor.width);
+    const lens = `${focal} mm${eq < 27 ? ' grandangolo' : eq > 80 ? ' tele' : ''}`;
+    this.camera.updateMatrixWorld();
+    const fr = this.frameRect;
+    const fy0 = fr.y0 * 2 - 1, fy1 = fr.y1 * 2 - 1, fx0 = fr.x0 * 2 - 1, fx1 = fr.x1 * 2 - 1;
+    const ndc = (v: THREE.Vector3) => v.clone().project(this.camera);
+    const inFront = (v: THREE.Vector3) => v.clone().applyMatrix4(this.camera.matrixWorldInverse).z < -0.05;
+    // la persona inquadrata più vicina
+    let best: { id: string; d: number } | null = null;
+    for (const [id] of this.people) {
+      const h = this.jointWorld(id, 'head');
+      if (!h || !inFront(h)) continue;
+      const n = ndc(h);
+      if (n.x < fx0 || n.x > fx1 || n.y < fy0 - 0.25 || n.y > fy1 + 0.6) continue;
+      const d = h.distanceTo(this.camera.position);
+      if (!best || d < best.d) best = { id, d };
+    }
+    const pitch = THREE.MathUtils.radToDeg(this.pitch);
+    let size = '', angle = '';
+    if (best) {
+      const J = (n: string) => this.jointWorld(best!.id, n);
+      const head = J('head')!, chest = J('chest'), hips = J('hips'), knee = J('knee_l'), ankle = J('ankle_l');
+      const top = head.clone().add(new THREE.Vector3(0, 0.14, 0));
+      const chin = head.clone().add(new THREE.Vector3(0, -0.07, 0));
+      const lows = [ankle, J('ankle_r'), J('knee_r'), knee, hips].filter(Boolean) as THREE.Vector3[];
+      const feet = new THREE.Vector3(head.x, Math.max(0, Math.min(...lows.map((v) => v.y)) - 0.08), head.z);
+      const y = (v: THREE.Vector3 | null) => (v && inFront(v) ? ndc(v).y : -9);
+      const yb = fy0;
+      const yt = y(top), yf = y(feet);
+      if (yb <= yf) {
+        const frac = (yt - yf) / (fy1 - fy0);
+        size = frac > 0.55 ? 'Figura intera' : frac > 0.22 ? 'Campo medio' : 'Campo lungo';
+      } else if (yb < y(knee)) size = 'Piano americano';
+      else if (yb < y(hips ? hips.clone().add(new THREE.Vector3(0, 0.08, 0)) : null)) size = 'Mezza figura';
+      else if (yb < y(chest)) size = 'Primo piano';
+      else if (yb < y(chin) || yt < fy1) size = 'Primissimo piano';
+      else size = 'Dettaglio';
+      const eye = head.y + 0.03;
+      const dy = this.camera.position.y - eye;
+      angle = pitch < -55 ? 'a picco' : dy > 0.35 || pitch < -18 ? "dall'alto" : dy < -0.35 || pitch > 15 ? 'dal basso' : 'altezza occhi';
+    } else angle = pitch < -55 ? 'a picco' : pitch < -18 ? "dall'alto" : pitch > 15 ? 'dal basso' : '';
+    const text = [size, angle, lens].filter(Boolean).join(' · ');
+    return { size, angle, lens, text };
+  }
+
+  // regia: la stessa inquadratura vista con obiettivi diversi (anteprima veloce)
+  lensStrip(focals: number[], width = 360): { focal: number; url: string; text: string }[] {
+    const s = this.snapshot;
+    if (!s || this.shot) return [];
+    const prev = s.cam;
+    const out: { focal: number; url: string; text: string }[] = [];
+    try {
+      for (const f of focals) {
+        s.cam = { ...prev, focal: f };
+        this.updateLens();
+        const cv = this.grabPreview();
+        const t = document.createElement('canvas');
+        t.width = width; t.height = Math.max(2, Math.round((width * cv.height) / cv.width));
+        t.getContext('2d')!.drawImage(cv, 0, 0, t.width, t.height);
+        out.push({ focal: f, url: t.toDataURL('image/jpeg', 0.82), text: this.describeShot().size });
+      }
+    } finally {
+      s.cam = prev;
+      this.updateLens();
+      this.dirty = true;
+    }
+    return out;
   }
 
   // anteprima: copia il canvas corrente (inquadratura)

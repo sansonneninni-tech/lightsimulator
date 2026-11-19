@@ -11,7 +11,7 @@ function shotOf(canvas: HTMLCanvasElement): Shot & any {
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.quaternion);
   const fr = e.frameRect;
   const hfov = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(e.camera.fov) / 2) * e.camera.aspect * (fr.x1 - fr.x0));
-  return { id: newId('s'), url: canvas.toDataURL('image/jpeg', 0.92), width: canvas.width, height: canvas.height, scene: snapshotOf(), createdAt: Date.now(), camPos: e.camera.position.toArray(), camDir: fwd.toArray(), hfov };
+  return { id: newId('s'), url: canvas.toDataURL('image/jpeg', 0.92), width: canvas.width, height: canvas.height, scene: snapshotOf(), createdAt: Date.now(), camPos: e.camera.position.toArray(), camDir: fwd.toArray(), hfov, desc: e.describeShot().text };
 }
 
 export function getPose(): Pose {

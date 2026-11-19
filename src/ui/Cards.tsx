@@ -1,4 +1,5 @@
 // Schede accanto all'elemento selezionato: luce, persona, oggetto.
+import * as THREE from 'three';
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
@@ -6,7 +7,7 @@ import Pop from './Pop';
 import { edgePoint } from './Handles';
 import { Svg, Del, Eye, TYPE_ICONS, POSE_ICONS } from './icons';
 import {
-  fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter,
+  fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter, illuminanceAt,
 } from '../engine/photometry';
 import { POSES, SKINS, poseJoints, PoseId } from '../engine/mannequin';
 import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection, SCHEMES, applyScheme, faceExposure, exposeFace } from '../actions';
@@ -31,12 +32,46 @@ function useAnchor(pos: [number, number, number] | undefined, key: string) {
   return xy;
 }
 
+// "solo" come sul banco luci: le altre luci aggiunte si spengono, poi tornano com'erano
+let solo: { id: string; was: Record<string, boolean> } | null = null;
+export function toggleSolo(id: string) {
+  const s = useStore.getState();
+  s.snapshot();
+  if (solo && solo.id === id) {
+    const was = solo.was; solo = null;
+    useStore.setState({ lights: s.lights.map((l) => (l.id in was ? { ...l, on: was[l.id] } : l)) });
+    s.showToast('Luci di nuovo come prima.');
+    return;
+  }
+  const base = solo ? solo.was : Object.fromEntries(s.lights.filter((l) => l.origin !== 'finestra').map((l) => [l.id, l.on]));
+  solo = { id, was: base };
+  useStore.setState({ lights: s.lights.map((l) => (l.origin === 'finestra' ? l : { ...l, on: l.id === id })) });
+  s.showToast('Solo questa luce: le altre tornano quando chiudi la scheda.');
+}
+
+useStore.subscribe((s, prev) => {
+  if (!solo) return;
+  const cur = solo;
+  const restore = (ls: import('../engine/photometry').LightState[]) => ls.map((l) => (l.id in cur.was ? { ...l, on: cur.was[l.id] } : l));
+  if (s.abCur !== prev.abCur) {
+    // cambio di versione: si rimette a posto quella appena lasciata (e la copia appena nata)
+    solo = null;
+    useStore.setState({ abOther: s.abOther ? restore(s.abOther) : s.abOther, lights: prev.abOther ? s.lights : restore(s.lights) });
+    return;
+  }
+  const me = s.lights.find((l) => l.id === cur.id);
+  const intact = !!me && me.on && s.lights.every((l) => l.origin === 'finestra' || l.id === cur.id || !l.on);
+  if (!intact) { solo = null; if (!me) useStore.setState({ lights: restore(s.lights) }); return; } // annulla o luce tolta
+  if (s.selection?.id !== cur.id) { solo = null; useStore.setState({ lights: restore(s.lights) }); s.showToast('Luci di nuovo come prima.'); }
+});
+
 export function LightCard({ id }: { id: string }) {
   const L = useStore((s) => s.lights.find((l) => l.id === id));
   const cam = useStore((s) => s.cam);
   const sun = useStore((s) => s.sun);
   const st = useStore.getState;
   const [more, setMore] = useState(false);
+  const soloOf = useStore((s) => (solo && s.lights.some((l) => l.id === solo!.id) ? solo.id : null));
   const xy = useAnchor(L?.position, id);
   if (!L) return null;
   const fx = fixtureById(L.fixtureId);
@@ -67,6 +102,37 @@ export function LightCard({ id }: { id: string }) {
         }} />
         {win && st().room && <div className="hint" style={{ marginTop: 8 }}>Vale per tutte le finestre, come un filtro ND sui vetri: abbassa sole e cielo insieme, anche nello scatto. L'interruttore chiude l'oscurante.</div>}
         {rd && <div className="hint num" style={{ marginTop: 8 }}>Dove punta: {Math.round(rd.lux).toLocaleString('it-IT')} lux, {Math.abs(over) < 0.05 ? 'esposto giusto' : `${Math.abs(over).toFixed(1)} stop ${over > 0 ? 'sopra' : 'sotto'}`} a f/{fmtStop(cam.fStop)}, ISO {cam.iso}{over > 2.5 ? ' · lì è bruciato' : over < -3 ? ' · lì è quasi nero' : ''}</div>}
+        {rd && !L.attached && Math.abs(over) >= 0.3 && (() => {
+          // legge dell'inverso del quadrato: invece del dimmer, la sposti lungo il fascio.
+          // Le distanze si contano dal punto misurato P (sull'asse del fascio), non dal mirino.
+          const P = rd.point.clone(), N = rd.normal.clone(), Lp = new THREE.Vector3(...L.position);
+          const d = Lp.distanceTo(P);
+          if (d < 0.05) return null;
+          const back = Lp.clone().sub(P).normalize();
+          const moved = (k: number) => { const t = back.clone().multiplyScalar(d * (k - 1)); return { position: Lp.clone().add(t).toArray() as [number, number, number], target: new THREE.Vector3(...L.target).add(t).toArray() as [number, number, number] }; };
+          // conta solo la parte di luce che viene da questa: il resto (finestre, altre luci) non cambia
+          const at = (k: number) => illuminanceAt({ ...L, ...moved(k) }, P, N, skyLux);
+          const mine = Math.min(rd.lux, at(1));
+          const need = rd.lux / Math.pow(2, over) - (rd.lux - mine);
+          if (mine <= 0 || need <= mine * 0.02) return null;
+          let lo = Math.min(1, 0.4 / d), hi = Math.max(1, 15 / d);
+          for (let i = 0; i < 30; i++) { const m = Math.sqrt(lo * hi); if (at(m) > need) lo = m; else hi = m; }
+          let nd = d * Math.sqrt(lo * hi);
+          // non oltre il muro, un mobile o un telaio alle sue spalle
+          const room = eng()?.clearance(P, back, 15) ?? 15;
+          const wall = nd > room - 0.3;
+          if (wall) nd = Math.max(d, room - 0.3);
+          // se spostarla cambia poco (la luce lì viene da altro), niente consiglio
+          const gain = Math.log2((rd.lux - mine + at(nd / d)) / rd.lux);
+          if (Math.abs(nd - d) < 0.05 || Math.abs(gain) < 0.2) return null;
+          const short = Math.abs(gain) < Math.abs(over) * 0.8;
+          const dist = (v: number) => v.toLocaleString('it-IT', { maximumFractionDigits: 1 });
+          return <button className="btn" style={{ marginTop: 8 }} title="Sposta la luce lungo il fascio fino all'esposizione giusta: stessa qualità di luce, senza dimmer" onClick={() => {
+            snap();
+            const m = moved(nd / d); // stessa direzione, più vicina o più lontana
+            up({ position: m.position.map((v) => +v.toFixed(3)) as [number, number, number], target: m.target.map((v) => +v.toFixed(3)) as [number, number, number] });
+          }}>{over > 0 ? 'Allontanala' : 'Avvicinala'} a {dist(nd)} m {wall ? '(più spazio non c\'è)' : short ? `(${Math.abs(gain).toFixed(1)} stop ${over > 0 ? 'in meno' : 'in più'})` : 'per esporre giusto'}</button>;
+        })()}
       </div>
       {!win && (
         <div className="row">
@@ -143,6 +209,7 @@ export function LightCard({ id }: { id: string }) {
               </div>
             </div>
           )}
+          {!win && <div className="line"><span title="Spegne le altre luci aggiunte (non finestre e sole) finché questa scheda resta aperta: vedi cosa fa solo questa">Solo questa luce</span><div className={`toggle ${soloOf === id ? 'on' : ''}`} onClick={() => toggleSolo(id)} /></div>}
           {(win || L.attached) && <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>}
           <div className="hint">{TOUCH ? "Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (il cursore Altezza la alza). Il mirino la punta, l'anello in verticale è il dimmer." : "Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin."}</div>
         </div>

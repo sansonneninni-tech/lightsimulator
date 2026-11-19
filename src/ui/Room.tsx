@@ -110,7 +110,7 @@ export function RoomPanel({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          <div className="hint">{room.outdoor && cat === 'pareti' ? (room.outdoor === 'citta' ? 'Va sulla facciata più vicina. Trascinalo per spostarlo lungo la strada.' : 'Qui non ci sono pareti: quadri e specchi vanno in centro città, sulle facciate.') : room.outdoor && cat === 'luci' ? 'Le lampade a soffitto all\'aperto non si possono appendere; quelle da terra e da tavolo sì.' : cat === 'pareti' ? 'Va sulla parete che stai guardando. Trascinalo per spostarlo lungo le pareti.' : cat === 'luci' ? 'Le lampade fanno luce vera: regolala nel pannello Luci.' : cat === 'decoro' ? 'Si appoggia sul mobile più vicino, se c\'è.' : 'Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi.'}</div>
+          <div className="hint">{room.outdoor && cat === 'pareti' ? (room.outdoor === 'citta' ? 'Va sulla facciata più vicina. Trascinalo per spostarlo lungo la strada.' : 'Qui non ci sono pareti: quadri e specchi vanno in centro città, sulle facciate.') : room.outdoor && cat === 'luci' ? 'Le lampade a soffitto all\'aperto non si possono appendere; quelle da terra e da tavolo sì.' : cat === 'pareti' ? 'Va sulla parete che stai guardando. Trascinalo per spostarlo lungo le pareti.' : cat === 'luci' ? 'Le lampade fanno luce vera: regolala nel pannello Luci.' : cat === 'set' ? 'Bandiere, telai e pannelli cambiano davvero la luce nello scatto: tolgono, rimbalzano o diffondono.' : cat === 'decoro' ? 'Si appoggia sul mobile più vicino, se c\'è.' : 'Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi.'}</div>
         </>
       ) : room.outdoor ? (
         <>

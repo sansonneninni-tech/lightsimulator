@@ -23,6 +23,7 @@ export interface CamState {
   shutter: number;
   aspect: string;
   falseColor: boolean;
+  look?: string; // look di camera (LOOKS); assente = neutro
   focus?: number; // metri; 0 o assente = automatico
 }
 
@@ -33,6 +34,7 @@ export interface Shot {
   height: number;
   scene: SceneSnapshot;
   createdAt: number;
+  desc?: string; // regia: taglio, altezza e obiettivo dell'inquadratura
   // fotogramma di un movimento di camera
   move?: { group: string; kind: string; amount: number; frame: number; of: number; label: string; text: string; start: [number, number, number]; end: [number, number, number]; endDir: [number, number, number] };
 }
@@ -63,6 +65,8 @@ interface Store extends SceneSnapshot {
   manikin: string | null;
   showOriginal: boolean;
   meter: boolean;
+  guides: boolean; // regia: guide di inquadratura (terzi, centro, taglio)
+  lensStrip: boolean; // regia: confronto obiettivi aperto
   meterPin: { p: [number, number, number]; text: string } | null;
   viewer: string | null;
   shots: Shot[];
@@ -109,6 +113,8 @@ export const useStore = create<Store>((set, get) => ({
   manikin: null,
   showOriginal: false,
   meter: false,
+  guides: false,
+  lensStrip: false,
   meterPin: null,
   viewer: null,
   shots: [],

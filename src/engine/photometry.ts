@@ -268,3 +268,13 @@ export const fmtStop = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1).rep
 export function nearestStop(n: number) {
   return FSTOPS.reduce((a, b) => (Math.abs(Math.log2(b / n)) < Math.abs(Math.log2(a / n)) ? b : a));
 }
+
+// look di camera (come una LUT sul monitor): stesso ordine dello shader
+export const LOOKS = [
+  { id: 'neutro', name: 'Neutro' },
+  { id: 'pellicola', name: 'Pellicola' },
+  { id: 'teal', name: 'Teal & orange' },
+  { id: 'bleach', name: 'Bleach bypass' },
+  { id: 'bn', name: 'B/N' },
+  { id: 'notte', name: 'Notte americana' },
+];
