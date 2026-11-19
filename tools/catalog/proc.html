@@ -325,6 +325,30 @@ B.fondale_nero = () => B.fondale('#111111');
 B.baule = () => { const g = new THREE.Group(); const b = mesh(new THREE.BoxGeometry(0.8, 0.5, 0.5), mat('#1b1b1b', 0.55, 0.1)); b.position.y = 0.32; g.add(b); for (const x of [-0.4, 0.4]) for (const y of [0.07, 0.57]) for (const z of [-0.25, 0.25]) { const c = mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), chromeM()); c.position.set(x, y, z); g.add(c); } for (const x of [-0.28, 0.28]) for (const z of [-0.18, 0.18]) { const w = mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 14), blackM()); w.rotation.z = Math.PI / 2; w.position.set(x, 0.035, z); g.add(w); } return g; };
 B.prolunga = () => { const g = new THREE.Group(); const m = mat('#e0a21b', 0.6); for (let i = 0; i < 6; i++) { const t = mesh(new THREE.TorusGeometry(0.17 + i * 0.012, 0.009, 6, 32), m); t.rotation.x = Math.PI / 2; t.position.y = 0.01 + i * 0.016; g.add(t); } return g; };
 
+// ---- gobo e altri telai (ombre disegnate davvero nello scatto) ----
+function holedPanel(w, h, holes, color = '#111') {
+  const sh = new THREE.Shape(); sh.moveTo(-w / 2, -h / 2); sh.lineTo(w / 2, -h / 2); sh.lineTo(w / 2, h / 2); sh.lineTo(-w / 2, h / 2); sh.lineTo(-w / 2, -h / 2);
+  for (const pts of holes) { const p = new THREE.Path(); p.moveTo(pts[0][0], pts[0][1]); for (const q of pts.slice(1)) p.lineTo(q[0], q[1]); p.lineTo(pts[0][0], pts[0][1]); sh.holes.push(p); }
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.008, bevelEnabled: false, curveSegments: 4 }); g.translate(0, 0, -0.004);
+  return mesh(g, mat(color, 0.9));
+}
+const panelOnStand = (make, top = 1.45) => () => { const g = new THREE.Group(); const t = cstand(g, 0, -0.15, top, 0.45); const p = make(); p.position.set(0, t + 0.55, 0); g.add(p); g.add(rod(V(0, t, -0.15), V(0, t + 0.1, 0), 0.01, steelM(), 8)); return g; };
+B.cucoloris = panelOnStand(() => { const r = rng(7), holes = []; const W = 1.0, H = 1.0; for (let i = 0; i < 26; i++) { const cx = (r() - 0.5) * 0.8, cy = (r() - 0.5) * 0.8, rx = 0.03 + r() * 0.07, ry = 0.02 + r() * 0.05, a = r() * 3; const pts = []; for (let k = 0; k < 7; k++) { const t = (k / 7) * Math.PI * 2, j = 0.7 + r() * 0.5; pts.push([cx + Math.cos(t + a) * rx * j, cy + Math.sin(t + a) * ry * j]); } holes.push(pts); } return holedPanel(W, H, holes, '#3b2f25'); });
+B.finestra_gobo = panelOnStand(() => { const holes = []; const W = 1.0, H = 1.2, b = 0.05; for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) { const x0 = -W / 2 + b + i * (W - b) / 2, y0 = -H / 2 + b + j * (H - b) / 3, x1 = x0 + (W - b) / 2 - b, y1 = y0 + (H - b) / 3 - b; holes.push([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]); } return holedPanel(W, H, holes, '#2a2a2a'); });
+B.veneziana = panelOnStand(() => { const g = new THREE.Group(); const m = mat('#e8e4da', 0.6); for (let i = 0; i < 22; i++) { const s = mesh(new THREE.BoxGeometry(1.0, 0.035, 0.002), m); s.position.y = -0.55 + i * 0.05; s.rotation.x = 0.6; g.add(s); } g.add(rod(V(-0.5, 0.6, 0), V(0.5, 0.6, 0), 0.012, m, 8)); for (const x of [-0.4, 0.4]) g.add(rod(V(x, -0.56, 0), V(x, 0.6, 0), 0.002, m, 4)); return g; });
+const bigFrame = (cloth) => () => { const g = new THREE.Group(); for (const x of [-1.25, 1.25]) cstand(g, x, 0, 1.9, 0.55); frame(g, V(0, 1.9 + 1.2, 0.04), 2.4, 2.4, cloth(), 0, 0.018); return g; };
+B.telaio8_diff = bigFrame(clothDiff);
+B.telaio8_nero = bigFrame(clothBlack);
+B.telaio8_bianco = bigFrame(clothWhite);
+const clothGrid = () => new THREE.MeshPhysicalMaterial({ color: '#ffffff', roughness: 1, transmission: 0.55, thickness: 0.001, ior: 1.01, side: THREE.DoubleSide });
+B.telaio_griglia = () => { const g = new THREE.Group(); const top = cstand(g, 0, 0, 1.5, 0.5); frame(g, V(0, top + 0.6, 0.05), 1.2, 1.2, clothGrid()); return g; };
+B.telaio_nero = () => { const g = new THREE.Group(); const top = cstand(g, 0, 0, 1.5, 0.5); frame(g, V(0, top + 0.6, 0.05), 1.2, 1.2, clothBlack()); return g; };
+B.fondale_blu = () => B.fondale('#1f4fb4');
+B.fondale_grigio = () => B.fondale('#7c7c7a');
+B.polyboard_nero = () => { const g = new THREE.Group(); const top = cstand(g, 0, -0.1, 0.7, 0.4); const p = mesh(new THREE.BoxGeometry(1.2, 1.2, 0.04), mat('#0d0d0d', 0.95)); p.position.set(0, top + 0.6, 0); p.rotation.x = -0.15; g.add(p); return g; };
+B.tenda_nera = () => { const g = new THREE.Group(); for (const x of [-1.0, 1.0]) cstand(g, x, 0, 2.4, 0.45); g.add(rod(V(-1.05, 2.42, 0), V(1.05, 2.42, 0), 0.015, steelM(), 8)); const pos = [], idx = []; const NX = 40, NY = 10; for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) { const x = -1 + (2 * i) / NX; pos.push(x, 2.4 - (2.3 * j) / NY, Math.sin(i * 0.9) * 0.05); if (i && j) { const a = j * (NX + 1) + i; idx.push(a - NX - 2, a - 1, a, a - NX - 2, a, a - NX - 1); } } const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); tg.setIndex(idx); tg.computeVertexNormals(); g.add(mesh(tg, clothBlack())); return g; };
+B.scala_set = () => { const g = new THREE.Group(); const m = mat('#c9c9c4', 0.4, 0.8); for (const s of [-1, 1]) { g.add(rod(V(s * 0.25, 0, 0.35), V(s * 0.2, 1.8, 0), 0.02, m, 8)); g.add(rod(V(s * 0.25, 0, -0.35), V(s * 0.2, 1.8, 0), 0.02, m, 8)); } for (let i = 1; i < 6; i++) { const y = i * 0.3, z = 0.35 - (i * 0.3 / 1.8) * 0.35; g.add(rod(V(-0.24, y, z), V(0.24, y, z), 0.015, m, 6)); } const t = mesh(new THREE.BoxGeometry(0.45, 0.03, 0.3), m); t.position.set(0, 1.81, 0); g.add(t); return g; };
+
 window.models = B;
 window.exportModel = async (name) => {
   const o = B[name]();
