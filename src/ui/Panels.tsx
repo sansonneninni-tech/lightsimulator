@@ -7,7 +7,7 @@ import { eng } from '../engineRef';
 import Pop from './Pop';
 import { Svg, TYPE_ICONS, POSE_ICONS } from './icons';
 import { cssColor } from './Handles';
-import { FOCALS, SENSORS, ISO_VALUES, FSTOPS, SHUTTERS, ASPECTS, fmtShutter, fmtStop } from '../engine/photometry';
+import { FOCALS, SENSORS, ISO_VALUES, FSTOPS, SHUTTERS, ASPECTS, LOOKS, fmtShutter, fmtStop, fixtureById } from '../engine/photometry';
 import { POSES, PoseId } from '../engine/mannequin';
 import { WEATHER, fmtHour, sunAngles, sunSky } from '../engine/sun';
 import { LIGHT_TYPES, addLight, addPerson, addProp, switchAB } from '../actions';
@@ -61,6 +61,7 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
       <div className="types four">
         {PROP_KINDS.map((k) => <button key={k.id} className="type" onClick={() => { addProp(k.id); onClose(); }}><Svg d={TYPE_ICONS[k.name]} />{k.name}</button>)}
       </div>
+      <Power lights={lights} />
       {hasPhoto && <button className="more" onClick={() => setMore(!more)}>{more ? 'Meno ‹' : 'Più ›'}</button>}
       {more && hasPhoto && (
         <div className="row" style={{ marginBottom: 0, marginTop: 10 }}>
@@ -70,6 +71,21 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
         </div>
       )}
     </Pop>
+  );
+}
+
+// corrente sul set: apparecchi aggiunti e accesi, a piena potenza (come li conta l'elettricista)
+function Power({ lights }: { lights: import('../engine/photometry').LightState[] }) {
+  const on = lights.filter((L) => L.origin === 'aggiunta' && L.on && !L.attached);
+  if (!on.length) return null;
+  const w = on.reduce((a, L) => a + fixtureById(L.fixtureId).watts, 0);
+  const amps = w / 230;
+  const lines = Math.max(1, Math.ceil(amps / 16));
+  const home = w <= 3000;
+  return (
+    <div className="hint num" style={{ marginTop: 12 }} title="Potenza nominale degli apparecchi accesi, a 230 V">
+      Corrente: {w.toLocaleString('it-IT')} W · {amps.toLocaleString('it-IT', { maximumFractionDigits: 1 })} A · {home ? 'basta una presa di casa (3 kW)' : `${lines} ${lines === 1 ? 'linea' : 'linee'} da 16 A${w > 6000 ? ' o un generatore' : ''}`}
+    </div>
   );
 }
 
@@ -140,6 +156,10 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
       <div className="line"><span>False color</span><div className={`toggle ${cam.falseColor ? 'on' : ''}`} onClick={() => set({ falseColor: !cam.falseColor })} /></div>
       <div className="line"><span>Guide di inquadratura{!TOUCH && <span style={{ color: 'var(--t3)' }}> · tasto G</span>}</span><div className={`toggle ${guides ? 'on' : ''}`} onClick={() => useStore.setState({ guides: !guides })} /></div>
       <div className="line"><span>Esposimetro: tocca un punto della scena</span><div className={`toggle ${meter ? 'on' : ''}`} onClick={() => { useStore.setState({ meter: !meter, meterPin: null }); if (!meter) useStore.getState().showToast('Tocca un punto: ti dico lux e diaframma.'); }} /></div>
+      <div className="row">
+        <div className="k"><span>Look</span><span style={{ color: 'var(--t3)' }}>anche nello scatto</span></div>
+        <div className="chips">{LOOKS.map((m) => <button key={m.id} className={`chip ${(cam.look || 'neutro') === m.id ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ look: m.id }); }}>{m.name}</button>)}</div>
+      </div>
       <div className="row">
         <div className="k"><span>Formato</span></div>
         <div className="chips">{ASPECTS.map((m) => <button key={m.id} className={`chip ${cam.aspect === m.id ? 'on' : ''}`} onClick={() => set({ aspect: m.id })}>{m.name}</button>)}</div>
