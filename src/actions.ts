@@ -143,9 +143,9 @@ export function addPerson(pose: PoseId) {
     // abbastanza lontana da entrare intera nell'inquadratura, ma prima di pareti e mobili davanti
     const hit = e.rayPlane(r.left + r.width / 2, r.top + r.height * 0.66, new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
     const flat = hit ? hit.clone().setY(0).distanceTo(e.camera.position.clone().setY(0)) : 3;
-    const d = Math.max(2, Math.min(3.2, flat));
+    const d = Math.max(2.5, Math.min(3.4, flat));
     pos = e.camera.position.clone().addScaledVector(fwd, d);
-    const offset = new THREE.Vector3(-fwd.z, 0, fwd.x).multiplyScalar([0, 0.8, -0.8][s.people.length % 3]);
+    const offset = new THREE.Vector3(-fwd.z, 0, fwd.x).multiplyScalar([0, 0.8, -0.8][s.people.length % 3] * (r.width < r.height ? 0.6 : 1));
     pos.add(offset);
     pos.y = 0;
     rotY = THREE.MathUtils.radToDeg(Math.atan2(-fwd.x, -fwd.z));
