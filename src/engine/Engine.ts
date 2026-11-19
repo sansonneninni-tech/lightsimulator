@@ -1429,6 +1429,8 @@ export class Engine {
     this.camera.quaternion.copy(this.homePose.quat);
     const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
     this.yaw = e.y; this.pitch = e.x; this.homeRoll = e.z;
+    // telefono in verticale: l'inquadratura alta mostrerebbe soprattutto il soffitto, si abbassa un poco lo sguardo
+    if (this.container.clientHeight > this.container.clientWidth * 1.2) this.pitch -= 0.14;
     this.applyLook();
     this.dirty = true;
   }
