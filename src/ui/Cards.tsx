@@ -32,12 +32,30 @@ function useAnchor(pos: [number, number, number] | undefined, key: string) {
   return xy;
 }
 
+// "solo" come sul banco luci: le altre luci aggiunte si spengono, poi tornano com'erano
+let solo: { id: string; was: Record<string, boolean> } | null = null;
+export function toggleSolo(id: string) {
+  const s = useStore.getState();
+  s.snapshot();
+  if (solo && solo.id === id) {
+    const was = solo.was; solo = null;
+    useStore.setState({ lights: s.lights.map((l) => (l.id in was ? { ...l, on: was[l.id] } : l)) });
+    s.showToast('Luci di nuovo come prima.');
+    return;
+  }
+  const base = solo ? solo.was : Object.fromEntries(s.lights.filter((l) => l.origin !== 'finestra').map((l) => [l.id, l.on]));
+  solo = { id, was: base };
+  useStore.setState({ lights: s.lights.map((l) => (l.origin === 'finestra' ? l : { ...l, on: l.id === id })) });
+  s.showToast('Solo questa luce: le altre sono spente. Rispegni Solo per riaverle.');
+}
+
 export function LightCard({ id }: { id: string }) {
   const L = useStore((s) => s.lights.find((l) => l.id === id));
   const cam = useStore((s) => s.cam);
   const sun = useStore((s) => s.sun);
   const st = useStore.getState;
   const [more, setMore] = useState(false);
+  const soloOf = useStore((s) => (solo && s.lights.some((l) => l.id === solo!.id) ? solo.id : null));
   const xy = useAnchor(L?.position, id);
   if (!L) return null;
   const fx = fixtureById(L.fixtureId);
@@ -171,6 +189,7 @@ export function LightCard({ id }: { id: string }) {
               </div>
             </div>
           )}
+          {!win && <div className="line"><span title="Spegne per un momento le altre luci aggiunte (non finestre e sole): vedi cosa fa solo questa">Solo questa luce</span><div className={`toggle ${soloOf === id ? 'on' : ''}`} onClick={() => toggleSolo(id)} /></div>}
           {(win || L.attached) && <div className="line num"><span>Altezza</span><b>{L.position[1].toFixed(2)} m</b></div>}
           <div className="hint">{TOUCH ? "Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (il cursore Altezza la alza). Il mirino la punta, l'anello in verticale è il dimmer." : "Trascina il punto per spostarla ovunque, anche fuori dalla stanza o oltre la finestra (Alt o il cursore Altezza per alzarla). Il mirino la punta, l'anello in verticale è il dimmer. Alt + rotella: Kelvin."}</div>
         </div>
