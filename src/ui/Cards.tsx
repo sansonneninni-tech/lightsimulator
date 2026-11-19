@@ -1,4 +1,5 @@
 // Schede accanto all'elemento selezionato: luce, persona, oggetto.
+import * as THREE from 'three';
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
@@ -6,7 +7,7 @@ import Pop from './Pop';
 import { edgePoint } from './Handles';
 import { Svg, Del, Eye, TYPE_ICONS, POSE_ICONS } from './icons';
 import {
-  fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter,
+  fixtureById, GELS, DIFFUSIONS, effectiveKelvin, effectiveLumens, fStopForLux, fmtStop, fmtShutter, illuminanceAt,
 } from '../engine/photometry';
 import { POSES, SKINS, poseJoints, PoseId } from '../engine/mannequin';
 import { LIGHT_TYPES, TYPE_FIXTURE, familyType, fixturesOfType, removeSelection, SCHEMES, applyScheme, faceExposure, exposeFace } from '../actions';
@@ -67,6 +68,33 @@ export function LightCard({ id }: { id: string }) {
         }} />
         {win && st().room && <div className="hint" style={{ marginTop: 8 }}>Vale per tutte le finestre, come un filtro ND sui vetri: abbassa sole e cielo insieme, anche nello scatto. L'interruttore chiude l'oscurante.</div>}
         {rd && <div className="hint num" style={{ marginTop: 8 }}>Dove punta: {Math.round(rd.lux).toLocaleString('it-IT')} lux, {Math.abs(over) < 0.05 ? 'esposto giusto' : `${Math.abs(over).toFixed(1)} stop ${over > 0 ? 'sopra' : 'sotto'}`} a f/{fmtStop(cam.fStop)}, ISO {cam.iso}{over > 2.5 ? ' · lì è bruciato' : over < -3 ? ' · lì è quasi nero' : ''}</div>}
+        {rd && !L.attached && Math.abs(over) >= 0.3 && (() => {
+          // legge dell'inverso del quadrato: invece del dimmer, la sposti lungo il fascio
+          const d = Math.hypot(L.position[0] - L.target[0], L.position[1] - L.target[1], L.position[2] - L.target[2]);
+          // conta solo la parte di luce che viene da questa: il resto (finestre, altre luci) non cambia
+          const P = rd.point.clone(), N = rd.normal.clone();
+          const at = (k: number) => illuminanceAt({ ...L, position: [0, 1, 2].map((i) => L.target[i] + (L.position[i] - L.target[i]) * k) as [number, number, number] }, P, N, skyLux);
+          const mine = Math.min(rd.lux, at(1));
+          const need = rd.lux / Math.pow(2, over) - (rd.lux - mine);
+          if (mine <= 0 || need <= mine * 0.02) return null;
+          let lo = 0.4 / d, hi = 15 / d;
+          for (let i = 0; i < 30; i++) { const m = Math.sqrt(lo * hi); if (at(m) > need) lo = m; else hi = m; }
+          let nd = d * Math.sqrt(lo * hi);
+          // non oltre il muro o un mobile alle sue spalle (né dentro ciò che illumina)
+          const T = new THREE.Vector3(...L.target), back = new THREE.Vector3(...L.position).sub(T).normalize();
+          const room = eng()?.clearance(T, back, 15) ?? 15;
+          const wall = nd > room - 0.3;
+          if (wall) nd = Math.max(d, room - 0.3);
+          // se spostarla cambia poco (la luce lì viene da altro), niente consiglio
+          const gain = Math.log2((rd.lux - mine + at(nd / d)) / rd.lux);
+          if (Math.abs(nd - d) < 0.05 || Math.abs(gain) < 0.2) return null;
+          const short = Math.abs(gain) < Math.abs(over) * 0.8;
+          return <button className="btn" style={{ marginTop: 8 }} title="Sposta la luce lungo il fascio fino all'esposizione giusta: stessa qualità di luce, senza dimmer" onClick={() => {
+            snap();
+            const k = nd / d; // stessa direzione, più vicina o più lontana
+            up({ position: [0, 1, 2].map((i) => +(L.target[i] + (L.position[i] - L.target[i]) * k).toFixed(3)) as [number, number, number] });
+          }}>{over > 0 ? 'Allontanala' : 'Avvicinala'} a {nd.toLocaleString('it-IT', { maximumFractionDigits: 1 })} m {wall ? '(più spazio non c\'è)' : short ? `(${Math.abs(gain).toFixed(1)} stop ${over > 0 ? 'in meno' : 'in più'})` : 'per esporre giusto'}</button>;
+        })()}
       </div>
       {!win && (
         <div className="row">

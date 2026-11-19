@@ -23,6 +23,7 @@ export interface CamState {
   shutter: number;
   aspect: string;
   falseColor: boolean;
+  look?: string; // look di camera (LOOKS); assente = neutro
   focus?: number; // metri; 0 o assente = automatico
 }
 

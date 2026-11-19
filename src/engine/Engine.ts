@@ -7,7 +7,7 @@ import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLigh
 import type { Reconstruction } from './reconstruct';
 import {
   LightState, fixtureById, effectiveLumens, diffusionById, lightColor, spotAngles, spotCandela, illuminanceAt,
-  ev100, exposureFromEV100, ISO_VALUES, FSTOPS, SENSORS, ASPECTS, fStopForLux,
+  ev100, exposureFromEV100, ISO_VALUES, FSTOPS, SENSORS, ASPECTS, fStopForLux, LOOKS,
 } from './photometry';
 import { PersonState, buildMannequin, applyPose } from './mannequin';
 import { SunState, sunDirection, sunSky } from './sun';
@@ -30,7 +30,7 @@ const linToSrgb = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(
 const QUAD_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const QUAD_FRAG = `
 precision highp float;
-uniform sampler2D tDiffuse; uniform float exposure; uniform int falseColor; uniform vec4 frame; uniform float maskAlpha;
+uniform sampler2D tDiffuse; uniform float exposure; uniform int falseColor; uniform int look; uniform vec4 frame; uniform float maskAlpha;
 uniform sampler2D tPhoto; uniform sampler2D tBase; uniform sampler2D tCur; uniform sampler2D tMask;
 uniform sampler2D tAdd; uniform float addW;
 uniform float relightW; uniform float photoK; uniform vec2 texel; uniform mat4 invProj; uniform mat3 camRot; uniform mat3 photoRotInv; uniform mat4 photoProj;
@@ -49,6 +49,36 @@ vec3 neutral(vec3 color){
   return mix(color, vec3(newPeak), g);
 }
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0/2.4)) - 0.055, step(vec3(0.0031308), c)); }
+float lumaOf(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 sCurve(vec3 x, float k){ return clamp(x + k * x * (1.0 - x) * (2.0 * x - 1.0), 0.0, 1.0); }
+float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+// look di camera, nello spazio del monitor (uguale in anteprima e nello scatto)
+vec3 applyLook(vec3 s, int lk){
+  float y = lumaOf(s);
+  if (lk == 1) { // pellicola: curva da stampa, ombre fredde, alte luci calde, nero appena aperto, grana
+    s = sCurve(s, 0.55);
+    s = mix(s, vec3(lumaOf(s)), 0.12);
+    s += vec3(-0.012, 0.004, 0.022) * (1.0 - y) + vec3(0.035, 0.012, -0.03) * y;
+    s = s * 0.95 + 0.025;
+    s += (hash(gl_FragCoord.xy) - 0.5) * 0.035 * (1.0 - abs(y - 0.5));
+  } else if (lk == 2) { // teal & orange: incarnati caldi, ombre e fondi verso il ciano
+    float warm = clamp((s.r - s.b) * 2.5, 0.0, 1.0);
+    vec3 teal = vec3(0.0, 0.035, 0.06) * (1.0 - y) * (1.0 - warm);
+    vec3 orange = vec3(0.05, 0.015, -0.04) * warm * y;
+    s = sCurve(s + teal + orange - vec3(0.02, 0.0, 0.0) * (1.0 - warm) * (1.0 - y), 0.35);
+    s = mix(vec3(lumaOf(s)), s, 1.12);
+  } else if (lk == 3) { // bleach bypass: argento lasciato, colore spento e contrasto duro
+    s = mix(s, vec3(y), 0.55);
+    s = sCurve(s, 0.9);
+  } else if (lk == 4) { // bianco e nero (filtro giallo: cieli un po' più scuri)
+    float g = dot(s, vec3(0.32, 0.6, 0.08));
+    s = sCurve(vec3(g), 0.5);
+  } else if (lk == 5) { // notte americana: due stop sotto, blu, poco colore, alte luci contenute
+    s = mix(s, vec3(y), 0.6) * vec3(0.55, 0.72, 1.0) * 0.6;
+    s = pow(max(s, 0.0), vec3(1.1));
+  }
+  return clamp(s, 0.0, 1.0);
+}
 void main(){
   vec3 scene = texture2D(tDiffuse, vUv).rgb;
   if (relightW > 0.0) {
@@ -81,7 +111,10 @@ void main(){
   if (addW > 0.0) scene += texture2D(tAdd, vUv).rgb * addW;
   vec3 c = max(scene * exposure, 0.0);
   vec3 s = toSRGB(clamp(neutral(c), 0.0, 1.0));
+  vec3 s0 = s;
+  if (look > 0) s = applyLook(s, look);
   if (falseColor == 1) {
+    s = s0;
     float y = dot(s, vec3(0.2126, 0.7152, 0.0722)) * 100.0;
     vec3 g = vec3(dot(s, vec3(0.2126, 0.7152, 0.0722))) * 0.8 + 0.05;
     if (y < 2.5) g = vec3(0.45, 0.05, 0.6);
@@ -245,7 +278,7 @@ export class Engine {
     this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4, colorSpace: THREE.LinearSRGBColorSpace });
     this.quadMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT, fragmentShader: QUAD_FRAG, depthTest: false, depthWrite: false,
-      uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 },
+      uniforms: { tDiffuse: { value: this.rt.texture }, exposure: { value: 1 }, falseColor: { value: 0 }, look: { value: 0 }, frame: { value: new THREE.Vector4(0, 0, 1, 1) }, maskAlpha: { value: 0.12 },
         tPhoto: { value: null }, tBase: { value: null }, tCur: { value: null }, tMask: { value: null }, tAdd: { value: null }, addW: { value: 0 }, relightW: { value: 0 }, photoK: { value: 1 }, texel: { value: new THREE.Vector2(0.001, 0.001) },
         invProj: { value: new THREE.Matrix4() }, camRot: { value: new THREE.Matrix3() }, photoRotInv: { value: new THREE.Matrix3() }, photoProj: { value: new THREE.Matrix4() } },
     });
@@ -854,6 +887,7 @@ export class Engine {
     this.updateIndirect();
     this.syncPropLights();
     this.quadMat.uniforms.falseColor.value = s.cam.falseColor ? 1 : 0;
+    this.quadMat.uniforms.look.value = Math.max(0, LOOKS.findIndex((l) => l.id === (s.cam.look || 'neutro')));
     this.dirty = true;
   }
 
@@ -1815,6 +1849,15 @@ export class Engine {
   }
 
   // lettura dell'esposimetro sulla superficie dove punta una luce (tutte le luci, con le ombre)
+  // spazio libero da un punto in una direzione (pareti, arredi, persone): per spostare una luce lungo il fascio
+  clearance(from: THREE.Vector3, dir: THREE.Vector3, max: number, skip = 0.15) {
+    const rc = new THREE.Raycaster(from.clone().addScaledVector(dir, skip), dir.clone().normalize(), 0, max);
+    (rc as any).firstHitOnly = true;
+    const occ = [...this.surfaces, ...this.furnitureObjects(), ...[...this.people.values()].map((x) => x.obj)];
+    const hit = rc.intersectObjects(occ, true).sort((a, b) => a.distance - b.distance)[0];
+    return hit ? hit.distance + skip : max;
+  }
+
   aimReading(L: { position: [number, number, number]; target: [number, number, number]; attached?: string }) {
     if (!this.snapshot) return null;
     const from = new THREE.Vector3(...L.position), to = new THREE.Vector3(...L.target);
@@ -1868,7 +1911,7 @@ export class Engine {
     if (this.outdoor) lux += this.skyIrradiance(p, hit.normal, s.sun);
     const c = s.cam;
     const fs = fStopForLux(lux, c.shutter, c.iso);
-    return { lux, fStop: fs, point: hit.point, stops: Math.log2(fs / c.fStop) * 2 };
+    return { lux, fStop: fs, point: hit.point, normal: hit.normal, stops: Math.log2(fs / c.fStop) * 2 };
   }
 
   // ---------------- loop ----------------
