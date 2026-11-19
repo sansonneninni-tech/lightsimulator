@@ -1,4 +1,6 @@
 // Pannelli del dock (Luci, Persone, Camera), luce naturale in alto a destra, menu del luogo in alto a sinistra.
+import { MOVES, moveLabel, CamMove } from '../engine/camMove';
+import { previewMove, shootMove } from '../shoot';
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { eng } from '../engineRef';
@@ -8,14 +10,18 @@ import { cssColor } from './Handles';
 import { FOCALS, SENSORS, ISO_VALUES, FSTOPS, SHUTTERS, ASPECTS, fmtShutter, fmtStop } from '../engine/photometry';
 import { POSES, PoseId } from '../engine/mannequin';
 import { WEATHER, fmtHour, sunAngles, sunSky } from '../engine/sun';
-import { LIGHT_TYPES, addLight, addPerson, addProp } from '../actions';
+import { LIGHT_TYPES, addLight, addPerson, addProp, switchAB } from '../actions';
+import { shareLink } from '../project';
+import { quickView } from './views';
 import { stopsLabel } from '../export/exports';
 import { PROP_KINDS } from '../engine/Engine';
+import { autoExpose, updateRoom } from '../build';
+import { TOUCH } from './touch';
 
 const FOCUS_VALUES = [0, 0.5, 0.7, 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 1000];
 const fmtFocus = (v: number) => (!v ? 'fuoco auto' : v >= 1000 ? 'fuoco ∞' : `fuoco ${v.toLocaleString('it-IT')} m`);
 
-export type PanelId = 'lights' | 'people' | 'camera' | 'sky' | 'place' | null;
+export type PanelId = 'room' | 'lights' | 'people' | 'camera' | 'sky' | 'place' | null;
 
 function dockAnchor() {
   const d = document.getElementById('dock');
@@ -31,15 +37,17 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
   const a = dockAnchor();
   const skyK = sunSky(sun).skyK;
   const [more, setMore] = useState(false);
+  const hasPhoto = useStore((s) => !!s.recon);
+  const ab = useStore((s) => s.abCur);
   return (
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={320} onClose={onClose}>
-      <h3>Luci</h3>
+      <h3><span>Luci</span><div className="ab" title="Due versioni delle luci da confrontare">{(['A', 'B'] as const).map((v) => <button key={v} className={ab === v ? 'on' : ''} onClick={() => { if (ab !== v) switchAB(); }}>{v}</button>)}</div></h3>
       <div className="list">
         {lights.map((L) => (
           <div key={L.id} className="it" onClick={() => { useStore.setState({ selection: { type: 'light', id: L.id } }); onClose(); }}>
             <span className="sw" style={{ background: cssColor(L.origin === 'finestra' ? skyK : L.kelvin, L.gel), opacity: L.on ? 1 : 0.25 }} />
             <span>{L.name}</span>
-            <span className="num">{L.origin === 'finestra' ? 'cielo' : `${stopsLabel(L.stops)} · ${L.kelvin} K`}</span>
+            <span className="num">{L.origin === 'finestra' ? 'cielo' : !L.on ? 'spenta' : `${stopsLabel(L.stops)} · ${L.kelvin} K`}</span>
           </div>
         ))}
         {!lights.length && <div className="hint">Nessuna luce in scena.</div>}
@@ -53,8 +61,8 @@ export function LightsPanel({ onClose }: { onClose: () => void }) {
       <div className="types four">
         {PROP_KINDS.map((k) => <button key={k.id} className="type" onClick={() => { addProp(k.id); onClose(); }}><Svg d={TYPE_ICONS[k.name]} />{k.name}</button>)}
       </div>
-      <button className="more" onClick={() => setMore(!more)}>{more ? 'Meno ‹' : 'Più ›'}</button>
-      {more && (
+      {hasPhoto && <button className="more" onClick={() => setMore(!more)}>{more ? 'Meno ‹' : 'Più ›'}</button>}
+      {more && hasPhoto && (
         <div className="row" style={{ marginBottom: 0, marginTop: 10 }}>
           <div className="k"><span>Luce che resta dalla foto</span><b className="num">{Math.round(ambient * 100)}%</b></div>
           <input type="range" min={0} max={1} step={0.01} value={ambient} onPointerDown={() => st().snapshot()} onChange={(e) => useStore.setState({ ambient: +e.target.value })} />
@@ -73,7 +81,7 @@ export function PeoplePanel({ onClose }: { onClose: () => void }) {
       <div className="poses">
         {POSES.map((p) => <button key={p.id} className="pose" onClick={() => { addPerson(p.id as PoseId); onClose(); }}><Svg d={POSE_ICONS[p.id]} vb="0 0 28 36" />{p.name}</button>)}
       </div>
-      <div className="hint">Doppio clic sull'anello di una persona per muovere le articolazioni.</div>
+      <div className="hint">{TOUCH ? 'Tocca una persona e accendi Manichino per muovere le articolazioni.' : "Doppio clic sull'anello di una persona per muovere le articolazioni."}</div>
     </Pop>
   );
 }
@@ -112,8 +120,10 @@ function DragValue<T>({ values, value, fmt, onChange }: { values: T[]; value: T;
 export function CameraPanel({ onClose }: { onClose: () => void }) {
   const cam = useStore((s) => s.cam);
   const meter = useStore((s) => s.meter);
+  const guides = useStore((s) => s.guides);
   const a = dockAnchor();
   const set = (p: any) => useStore.setState({ cam: { ...useStore.getState().cam, ...p } });
+  const hasPhoto = useStore((s) => !!s.recon);
   const focals = [...new Set([...FOCALS, Math.round(cam.focal)])].sort((x, y) => x - y);
   return (
     <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={560} onClose={onClose}>
@@ -128,14 +138,54 @@ export function CameraPanel({ onClose }: { onClose: () => void }) {
       </div>
       <div className="hint" style={{ margin: '4px 0 14px' }}>Trascina un valore a destra o a sinistra, o toccalo per il successivo. Il fuoco automatico segue la persona inquadrata o il centro.</div>
       <div className="line"><span>False color</span><div className={`toggle ${cam.falseColor ? 'on' : ''}`} onClick={() => set({ falseColor: !cam.falseColor })} /></div>
+      <div className="line"><span>Guide di inquadratura{!TOUCH && <span style={{ color: 'var(--t3)' }}> · tasto G</span>}</span><div className={`toggle ${guides ? 'on' : ''}`} onClick={() => useStore.setState({ guides: !guides })} /></div>
       <div className="line"><span>Esposimetro: tocca un punto della scena</span><div className={`toggle ${meter ? 'on' : ''}`} onClick={() => { useStore.setState({ meter: !meter, meterPin: null }); if (!meter) useStore.getState().showToast('Tocca un punto: ti dico lux e diaframma.'); }} /></div>
       <div className="row">
         <div className="k"><span>Formato</span></div>
         <div className="chips">{ASPECTS.map((m) => <button key={m.id} className={`chip ${cam.aspect === m.id ? 'on' : ''}`} onClick={() => set({ aspect: m.id })}>{m.name}</button>)}</div>
       </div>
-      <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>Torna all'inquadratura della foto</button>
-      <div className="hint">Muoviti nella stanza: trascina per guardare, rotella per avanzare, W A S D per camminare, Q E per scendere e salire, tasto destro per spostarti di lato.</div>
+      <div className="row">
+        <div className="k"><span>Vista</span>{!TOUCH && <span style={{ color: 'var(--t3)' }}>tasti 1 2 3</span>}</div>
+        <div className="chips">{([['pianta', 'Pianta'], ['camera', 'Camera'], ['viso', 'Viso']] as const).map(([k, n]) => <button key={k} className="chip" onClick={() => { quickView(k); onClose(); }}>{n}</button>)}</div>
+      </div>
+      <MoveRow onClose={onClose} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" onClick={() => { autoExpose(true); }}>Esposizione automatica</button>
+        <button className="btn" onClick={() => { onClose(); useStore.setState({ lensStrip: true }); }}>Confronta obiettivi</button>
+        <button className="btn" onClick={() => { eng()?.resetView(); const e = eng(); if (e && hasPhoto) set({ focal: Math.round(e.focalForPhoto(cam.sensor) * 10) / 10 }); onClose(); }}>{hasPhoto ? "Torna all'inquadratura della foto" : 'Torna alla vista iniziale'}</button>
+      </div>
+      <div className="hint">{TOUCH ? 'Muoviti nella stanza: un dito per guardare, pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), due dita per spostarti di lato.' : 'Muoviti nella stanza: trascina per guardare, rotella o pizzico per avvicinarti e allontanarti (puoi uscire dalla stanza: le pareti davanti a te spariscono), W A S D per camminare, Q E per scendere e salire, tasto destro o due dita per spostarti di lato.'}</div>
     </Pop>
+  );
+}
+
+// movimento di camera: tipo, quantità, fotogrammi; "Prova" lo mostra, "Scatta" ne fa i fotogrammi finali
+function MoveRow({ onClose }: { onClose: () => void }) {
+  const mv = useStore((s) => s.camMove);
+  const set = (m: CamMove | null) => useStore.setState({ camMove: m });
+  const d = mv ? MOVES.find((q) => q.id === mv.kind)! : null;
+  return (
+    <div className="row">
+      <div className="k"><span>Movimento</span>{mv && <b className="num">{moveLabel(mv)}</b>}</div>
+      <div className="chips">
+        <button className={`chip ${!mv ? 'on' : ''}`} onClick={() => set(null)}>Fermo</button>
+        {MOVES.map((q) => <button key={q.id} className={`chip ${mv?.kind === q.id ? 'on' : ''}`} onClick={() => set({ kind: q.id, amount: mv?.kind === q.id ? mv.amount : q.def, frames: mv?.frames || 3 })}>{q.name}</button>)}
+      </div>
+      {mv && d && (
+        <>
+          <input type="range" min={d.min} max={d.max} step={d.step} value={mv.amount} onChange={(e) => set({ ...mv, amount: +e.target.value })} style={{ marginTop: 12 }} />
+          <div className="k" style={{ marginTop: 6 }}><span style={{ color: 'var(--t3)' }}>{d.neg}</span><span style={{ color: 'var(--t3)' }}>{d.pos}</span></div>
+          <div className="line" style={{ marginTop: 6 }}><span>Fotogrammi</span>
+            <div className="chips">{[2, 3, 5].map((n) => <button key={n} className={`chip ${mv.frames === n ? 'on' : ''}`} onClick={() => set({ ...mv, frames: n })}>{n}</button>)}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn" onClick={() => previewMove(mv)}>Prova il movimento</button>
+            <button className="btn primary" onClick={() => { onClose(); setTimeout(() => shootMove(mv), 50); }}>Scatta {mv.frames} fotogrammi</button>
+          </div>
+          <div className="hint">Parte dall'inquadratura di adesso. Ogni fotogramma è un render finale; nel rullino restano insieme, con il movimento scritto nel PDF troupe e disegnato nella pianta.</div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -143,7 +193,22 @@ const SEASONS = [{ n: 'Inverno', d: 355 }, { n: 'Primavera', d: 80 }, { n: 'Esta
 
 export function SkyPanel({ onClose }: { onClose: () => void }) {
   const sun = useStore((s) => s.sun);
-  const hasWindows = useStore((s) => !!s.recon?.windows.length);
+  const outdoor = useStore((s) => !!s.room?.outdoor);
+  // all'aperto il sole arriva ovunque, come se fosse tutta finestra
+  const hasWindows = useStore((s) => (s.room ? !!s.room.outdoor || s.room.openings.some((o) => o.kind !== 'porta') : !!s.recon?.windows.length));
+  const built = useStore((s) => !!s.room);
+  const hasPeople = useStore((s) => s.people.length > 0);
+  // a che ora il sole arriva sul viso della persona scelta (o della prima)
+  const sunOnFace = () => {
+    const st = useStore.getState(), e = eng();
+    const id = st.selection?.type === 'person' ? st.selection.id : st.people[0]?.id;
+    if (!e || !id) return;
+    const P = st.people.find((p) => p.id === id)!;
+    const r = e.sunOnFace(id, { ...st.sun, enabled: true });
+    if (!r) { st.showToast(`In questo giorno il sole non arriva mai sul viso di ${P.name}. ${outdoor ? 'Gira la persona verso il sole, prova un\'altra stagione o ruota il set (Da dove arriva il sole).' : 'Prova un\'altra stagione, gira la stanza (Da dove entra il sole) o avvicina la persona alla finestra.'}`); return; }
+    st.snapshot(); set({ hour: Math.round(r.best * 12) / 12, enabled: true });
+    st.showToast(r.to - r.from < 0.1 ? `Il sole arriva sul viso di ${P.name} solo verso le ${fmtHour(r.best)}.` : `Il sole è sul viso di ${P.name} dalle ${fmtHour(r.from)} alle ${fmtHour(r.to)}. Messo alle ${fmtHour(r.best)}.`);
+  };
   const svg = useRef<SVGSVGElement>(null);
   const set = (p: any) => useStore.setState({ sun: { ...useStore.getState().sun, ...p } });
   // alba e tramonto del giorno scelto
@@ -180,15 +245,24 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
   return (
     <Pop x={el ? el.right : innerWidth - 20} y={el ? el.bottom + 8 : 60} anchor="below" width={300} onClose={onClose}>
       <h3><span>Luce naturale</span><div className={`toggle ${sun.enabled ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ enabled: !sun.enabled }); }} /></h3>
-      {!hasWindows && <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>Non ho trovato finestre nella foto: il sole non entra in questa stanza.</div>}
+      {!hasWindows && <div className="hint" style={{ marginTop: 0, marginBottom: 12 }}>{built ? 'La stanza non ha finestre: il sole non entra. Aggiungine una dal pannello Stanza.' : 'Non ho trovato finestre nella foto: il sole non entra in questa stanza.'}</div>}
       <svg ref={svg} viewBox="0 0 260 110" width="100%" style={{ display: 'block', overflow: 'visible', opacity: sun.enabled ? 1 : 0.4 }}>
         <path d="M10 100 A120 90 0 0 1 250 100" fill="none" stroke="rgba(255,255,255,.18)" strokeDasharray="3 4" />
         <line x1="0" y1="100" x2="260" y2="100" stroke="rgba(255,255,255,.12)" />
         <circle id="sundot" cx={cx} cy={cy} r="9" fill={night ? '#9fb3ff' : '#ffd27a'} style={{ cursor: 'grab', filter: `drop-shadow(0 0 8px ${night ? '#6f86ff' : '#ffb13b'})` }} />
       </svg>
       <div className="num" style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--t2)', fontSize: 11, margin: '8px 0 14px' }}>
-        <span>Alba {fmtHour(rise)}</span><b style={{ color: 'var(--t1)', fontWeight: 500 }}>{fmtHour(sun.hour)}</b><span>Tramonto {fmtHour(setH)}</span>
+        <span>Alba {fmtHour(rise)}</span><b style={{ color: 'var(--t1)', fontWeight: 500 }}>{fmtHour(sun.hour)}{night ? ' · notte' : ''}</b><span>Tramonto {fmtHour(setH)}</span>
       </div>
+      <div className="row">
+        <div className="chips">
+          {([['Mattina', rise + 1.5], ['Mezzogiorno', (rise + setH) / 2], ['Tramonto', setH - 0.4], ['Ora blu', setH + 0.45], ['Notte', Math.min(23.5, setH + 3)]] as [string, number][]).map(([n, h]) => (
+            <button key={n} className={`chip ${Math.abs(sun.hour - h) < 0.2 ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ hour: Math.round(h * 12) / 12, enabled: true }); }}>{n}</button>
+          ))}
+          {hasWindows && hasPeople && <button className="chip" title={outdoor ? 'Trova a che ora il sole arriva sul viso' : 'Trova a che ora il sole entra e arriva sul viso'} onClick={sunOnFace}>Sole sul viso</button>}
+        </div>
+      </div>
+      {built && hasWindows && !outdoor && <ShutterRow />}
       <div className="row">
         <div className="chips">{WEATHER.map((w) => <button key={w.id} className={`chip ${sun.weather === w.id ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ weather: w.id }); }}>{w.name}</button>)}</div>
       </div>
@@ -197,11 +271,24 @@ export function SkyPanel({ onClose }: { onClose: () => void }) {
         <div className="chips">{SEASONS.map((s) => <button key={s.n} className={`chip ${Math.abs(sun.dayOfYear - s.d) < 46 || Math.abs(sun.dayOfYear - s.d) > 319 ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); set({ dayOfYear: s.d }); }}>{s.n}</button>)}</div>
       </div>
       <div className="row" style={{ marginBottom: 0 }}>
-        <div className="k"><span>Da dove entra il sole</span><b className="num">{Math.round(((sun.north % 360) + 360) % 360)}°</b></div>
+        <div className="k"><span>{outdoor ? 'Da dove arriva il sole' : 'Da dove entra il sole'}</span><b className="num">{Math.round(((sun.north % 360) + 360) % 360)}°</b></div>
         <input type="range" min={0} max={359} step={1} value={((sun.north % 360) + 360) % 360} onPointerDown={() => useStore.getState().snapshot()} onChange={(e) => set({ north: +e.target.value })} />
-        <div className="hint">Ruota l'orientamento della stanza rispetto al nord.</div>
+        <div className="hint">{outdoor ? 'Ruota il set rispetto al nord.' : 'Ruota l\'orientamento della stanza rispetto al nord.'}</div>
       </div>
     </Pop>
+  );
+}
+
+// oscuranti di tutte le finestre insieme: il buio con un tocco
+function ShutterRow() {
+  const room = useStore((s) => s.room);
+  if (!room) return null;
+  const wins = room.openings.filter((o) => o.kind !== 'porta');
+  const allClosed = wins.every((o) => o.closed);
+  return (
+    <div className="row">
+      <button className="btn" onClick={() => { updateRoom({ openings: room.openings.map((o) => (o.kind === 'porta' ? o : { ...o, closed: !allClosed })) }, true); useStore.getState().showToast(allClosed ? 'Finestre aperte.' : 'Oscuranti chiusi: la stanza è al buio, accendi le tue luci.'); }}>{allClosed ? 'Apri tutte le finestre' : 'Chiudi tutti gli oscuranti (buio)'}</button>
+    </div>
   );
 }
 
@@ -212,10 +299,11 @@ export function PlaceMenu({ onClose, onNew, onSave, onOpen }: { onClose: () => v
   return (
     <Pop x={el ? el.left : 20} y={el ? el.bottom + 8 : 60} anchor="at" width={280} onClose={onClose} className="menu">
       <input className="name" value={name} onChange={(e) => useStore.setState({ placeName: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') onClose(); e.stopPropagation(); }} />
-      <button className="mi" onClick={() => { onNew(); onClose(); }}>Nuove foto</button>
+      <button className="mi" onClick={() => { onNew(); onClose(); }}>Nuova stanza</button>
       <button className="mi" onClick={() => { onSave(); onClose(); }}>Salva progetto <small>Cmd S</small></button>
       <button className="mi" onClick={() => { onOpen(); onClose(); }}>Apri progetto</button>
-      <button className="mi" onClick={() => { eng()?.resetView(); onClose(); }}>Torna all'inquadratura della foto</button>
+      <button className="mi" onClick={() => { shareLink(); onClose(); }}>{TOUCH ? 'Condividi link' : 'Copia link del progetto'}</button>
+      <button className="mi" onClick={() => { eng()?.resetView(); onClose(); }}>Torna alla vista iniziale <small>F</small></button>
       {shots.length > 0 && <button className="mi" onClick={() => { useStore.setState({ viewer: shots[shots.length - 1].id }); onClose(); }}>Esporta l'ultimo scatto</button>}
     </Pop>
   );

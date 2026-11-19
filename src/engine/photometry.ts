@@ -134,6 +134,8 @@ export function effectiveKelvin(kelvin: number, gelId: string) {
 
 // Flusso effettivo dopo dimmer, gel e diffusione
 export function effectiveLumens(L: LightState, skyLux = 10000) {
+  // sorgente virtuale (luce che attraversa un telaio di diffusione): flusso già calcolato
+  if (L.virtualLm !== undefined) return L.virtualLm;
   const fx = fixtureById(L.fixtureId);
   const base = L.origin === 'finestra' ? skyLux * L.size[0] * L.size[1] * 0.5 : fx.lumens;
   return base * Math.pow(2, L.stops) * gelById(L.gel).transmission * diffusionById(L.diffusion).transmission;
@@ -158,10 +160,13 @@ export interface LightState {
   diffusion: string;
   beam: number;          // gradi (spot)
   softness: number;      // 0-1 morbidezza (dimensione apparente della sorgente)
+  virtualLm?: number;    // solo interno: flusso della sorgente virtuale su un telaio di diffusione
   size: [number, number];// dimensioni (area)
   barnDoors: { top: number; bottom: number; left: number; right: number }; // gradi di chiusura 0-90
   on: boolean;
   origin: 'letta' | 'aggiunta' | 'finestra';
+  attached?: string;     // id dell'arredo (lampada) a cui appartiene
+  windowId?: string;     // id dell'apertura (finestre della stanza costruita)
 }
 
 let _id = 0;
