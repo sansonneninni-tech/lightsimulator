@@ -8,13 +8,17 @@ Tutti i modelli sono in pubblico dominio (CC0 1.0). Nessun modello CC-BY o di li
   andersanders806-dev/dopesick-game, Paraxdev/TrenchDot, ayoub5550/inside-copy-, sahilmdev/carr-game,
   awplanets/awplanet, rawprogress/fable-cities, MikeMirage/RoadRushers, darkyboys/Drunk-Driving-Simulator,
   AetherRadar/operation-steel-tide, jbang2004/long-wind, Civicverse/Civicverse, Adel-Ayoub/rabbet.
+  Altri 231 modelli Poly Haven (aggiunti il 2026-11-19) vengono dalla copia in jarchenn/enlistedv2
+  (content/assets/models/ph_*), riconvertiti in glTF con tools/catalog/en2glb.py.
   La licenza CC0 è quella di Poly Haven, indipendente dalla licenza del repository che li ospita.
   Alcuni pacchetti Poly Haven con più varianti sono stati ridotti a una sola variante.
 - Modelli originali del progetto PlanScape-AI (Jatvish/PlanScape-AI), CC0 1.0 secondo il suo
   apps/web/public/assets/realism/CREDITS.md e i metadati dei file (asset.extras.license = CC0-1.0).
   Escluso di proposito GlamVelvetSofa, che lì è CC BY 4.0.
 - Modelli fatti a mano per questo progetto (ombrellone, lettino, sdraio, telo da mare, borsa frigo,
-  cono stradale, bicicletta, palma, cactus a candelabro, cactus a barile): tools/catalog/proc.html, CC0 1.0.
+  cono stradale, bicicletta, palma, cactus a candelabro, cactus a barile) e l'attrezzatura da set
+  (bandiere, rete, cutter, telai, butterfly, V-flat, polistirolo, riflettori, apple box, sacco di sabbia,
+  binario, carrello, cinepresa, monitor, ciak, sedia da regista, fondali, baule, prolunga): tools/catalog/proc.html, CC0 1.0.
 
 I file sono stati ottimizzati (meshopt, texture webp 1024 px) e rinominati.
 Modifiche ai materiali: nella rete metallica e nel cancello in rete la trasparenza della maglia è

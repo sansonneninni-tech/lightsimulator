@@ -4,7 +4,7 @@ import { useStore } from '../store';
 import { eng } from '../engineRef';
 
 // guide sopra il formato: terzi, centro, area sicura 90%; in alto il taglio calcolato sulla persona
-export function Guides() {
+export function Guides({ busy }: { busy?: boolean }) {
   const on = useStore((s) => s.guides);
   const boxRef = useRef<HTMLDivElement>(null);
   const [text, setText] = useState('');
@@ -26,7 +26,7 @@ export function Guides() {
   }, [on]);
   if (!on) return null;
   return (
-    <div id="guides" ref={boxRef}>
+    <div id="guides" ref={boxRef} className={busy ? 'busy' : ''}>
       <svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 300 300">
         <path d="M100 0V300M200 0V300M0 100H300M0 200H300" />
         <path d="M150 140V160M140 150H160" />
