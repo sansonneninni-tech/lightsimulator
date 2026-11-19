@@ -314,7 +314,7 @@ export default function App() {
           ) : help && (
             <div id="help" className="chrome">Trascina: guardati intorno · tasto destro o Alt: gira attorno<br />Rotella: avvicinati · Maiusc + trascina: spostati<br />Trascina mobili, persone e punti luminosi per spostarli<br />Doppio clic: nuova luce · Cmd+Z: annulla · 1 2 3: pianta, camera, viso</div>
           )}
-          <Guides />
+          <Guides busy={!!panel} />
           <Roll />
           <SelectionCard />
           {panel === 'room' && <RoomPanel onClose={() => setPanel(null)} />}

@@ -126,7 +126,7 @@ export function Viewer() {
         <button className={tab === 'board' ? 'on' : ''} onClick={() => setTab('board')}>Storyboard</button>
         <button className="dl" onClick={dl} disabled={busy}>{busy ? 'Preparo…' : 'Scarica'}</button>
       </div>
-      <div className="meta num">{tab === 'board' ? `${shots.length} inquadrature in ordine di scatto · Scarica crea il PDF dello storyboard · ` : ''}{shot.desc ? `${shot.desc} · ` : ''}{shot.move ? `${shot.move.text} · fotogramma ${shot.move.frame + 1} di ${shot.move.of} · ` : ''}{shot.width} × {shot.height} · {cameraLine(shot.scene)}</div>
+      <div className="meta num">{tab === 'board' ? `${shots.length} ${shots.length === 1 ? 'inquadratura' : 'inquadrature'} in ordine di scatto · Scarica crea il PDF con lo storyboard e la pianta delle inquadrature` : <>{shot.desc ? `${shot.desc} · ` : ''}{shot.move ? `${shot.move.text} · fotogramma ${shot.move.frame + 1} di ${shot.move.of} · ` : ''}{shot.width} × {shot.height} · {cameraLine(shot.scene)}</>}</div>
     </div>
   );
 }

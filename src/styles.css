@@ -342,3 +342,4 @@ table.kit th{font-weight:600;font-size:11px;color:#666}
 @media (max-width:760px){#viewer .board{grid-template-columns:repeat(2,minmax(0,1fr));padding:12px;gap:12px}}
 #guides .lbl:empty{display:none}
 @media (max-width:760px){#guides .lbl{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 104px);font-size:11px;max-width:92%;white-space:normal;text-align:center}}
+@media (max-width:760px){#guides.busy .lbl{display:none}}
