@@ -350,7 +350,7 @@ export async function buildPDF(opts: { title: string; imageUrl: string; imgW: nu
   const svg = planSVG(opts.plan, { width: 1000, height: 640 });
   const pc = await svgToCanvas(svg, 2);
   const pr = Math.min(maxW / 1000, (PH - M * 2 - 20) / 640);
-  doc.addImage(pc.toDataURL('image/png'), 'PNG', (PW - 1000 * pr) / 2, M + 16, 1000 * pr, 640 * pr);
+  doc.addImage(pc.toDataURL('image/png'), 'PNG', (PW - 1000 * pr) / 2, M + 16, 1000 * pr, 640 * pr, undefined, 'FAST');
   // pagina 3: lista materiale
   doc.addPage();
   header('Lista materiale');
@@ -425,7 +425,7 @@ export async function buildStoryboard(title: string, shots: Shot[], plan?: PlanI
     const svg = planSVG(plan, { width: 1000, height: 640 });
     const pc = await svgToCanvas(svg, 2);
     const pr = Math.min((PW - M * 2) / 1000, (PH - M * 2 - 20) / 640);
-    doc.addImage(pc.toDataURL('image/png'), 'PNG', (PW - 1000 * pr) / 2, M + 16, 1000 * pr, 640 * pr);
+    doc.addImage(pc.toDataURL('image/png'), 'PNG', (PW - 1000 * pr) / 2, M + 16, 1000 * pr, 640 * pr, undefined, 'FAST');
   }
   return doc;
 }

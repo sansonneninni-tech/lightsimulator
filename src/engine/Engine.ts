@@ -15,7 +15,7 @@ import type { PropState, CamState, SceneSnapshot } from '../store';
 import { RoomSpec, WallId, wallFrame, buildRoom, roomBounds, windowInfos, skyTexture, WindowInfoLite } from './room';
 import { FurnitureState, buildFurniture, furnitureReady, onFurnitureLoaded } from './furniture';
 import { denoise } from './denoise';
-import { Rigs } from './rigs';
+import { Rigs, METAL as RIG_METAL } from './rigs';
 import { loadFigure, poseFigure, figureModel } from './figure';
 import { SKIN_MARK } from './human';
 import { buildOutdoor, OutdoorBuild, groundHeight, terrainHeight, CITY } from './outdoor';
@@ -896,6 +896,7 @@ export class Engine {
     if (!c) return;
     this.exposure = exposureFromEV100(ev100(c.fStop, c.shutter, c.iso));
     this.quadMat.uniforms.exposure.value = this.exposure;
+    RIG_METAL.emissiveIntensity = 1.2 / Math.max(1e-6, this.exposure);
     // la profondità di campo si calcola dopo (uguale in anteprima e nello scatto)
     this.camera.fStop = 1e9;
   }
