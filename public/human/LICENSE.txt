@@ -1,0 +1,3 @@
+Personaggi: modello base, bersagli di forma, scheletro, capelli, abiti, occhi e pelli da MakeHuman 1.x
+(makehumancommunity/makehuman, makehuman-assets). Gli asset di MakeHuman sono rilasciati CC0 1.0.
+Convertiti con tools/makehuman/convert.py; loghi rimossi dagli abiti con tools/makehuman/delogo.py.

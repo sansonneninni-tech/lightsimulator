@@ -27,6 +27,8 @@ export interface PersonState {
   pose: PoseId;
   joints: JointRot;  // rotazioni personalizzate (manichino)
   skin: string;
+  figure?: 'uomo' | 'donna';
+  look?: import('./human').Look; // aspetto del personaggio (vuoto = predefinito per uomo/donna e pelle)
   height: number;    // metri
 }
 
@@ -89,7 +91,7 @@ const POSE_DEFS: Record<PoseId, PoseDef> = {
   },
   conserte: {
     hipsY: 0.95,
-    joints: { shoulder_l: [-38, -28, 12], elbow_l: [-112, 0, 0], shoulder_r: [-38, 28, -12], elbow_r: [-112, 0, 0], hip_l: [0, 0, 3], hip_r: [0, 0, -3] },
+    joints: { shoulder_l: [-20, -70, 10], elbow_l: [-105, 0, 0], shoulder_r: [-20, 70, -10], elbow_r: [-105, 0, 0], hip_l: [0, 0, 3], hip_r: [0, 0, -3] },
   },
 };
 
