@@ -20,3 +20,17 @@ export const POSE_ICONS: Record<string, string> = {
 };
 
 export const Svg = ({ d, vb = '0 0 24 24' }: { d: string; vb?: string }) => <svg viewBox={vb} dangerouslySetInnerHTML={{ __html: d }} />;
+
+// occhio: guarda dalla luce (stesso posto e stile del cestino)
+export const Eye = ({ onClick, title }: { onClick: () => void; title: string }) => (
+  <button className="del eye" title={title} aria-label={title} onClick={(e) => { e.stopPropagation(); onClick(); }}>
+    <svg viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" /><circle cx="12" cy="12" r="2.6" /></svg>
+  </button>
+);
+
+// cestino sempre visibile nel titolo della scheda
+export const Del = ({ onClick, title = 'Elimina' }: { onClick: () => void; title?: string }) => (
+  <button className="del" title={title} aria-label={title} onClick={(e) => { e.stopPropagation(); onClick(); }}>
+    <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+  </button>
+);

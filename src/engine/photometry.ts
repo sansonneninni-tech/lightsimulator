@@ -134,6 +134,8 @@ export function effectiveKelvin(kelvin: number, gelId: string) {
 
 // Flusso effettivo dopo dimmer, gel e diffusione
 export function effectiveLumens(L: LightState, skyLux = 10000) {
+  // sorgente virtuale (luce che attraversa un telaio di diffusione): flusso già calcolato
+  if (L.virtualLm !== undefined) return L.virtualLm;
   const fx = fixtureById(L.fixtureId);
   const base = L.origin === 'finestra' ? skyLux * L.size[0] * L.size[1] * 0.5 : fx.lumens;
   return base * Math.pow(2, L.stops) * gelById(L.gel).transmission * diffusionById(L.diffusion).transmission;
@@ -158,10 +160,13 @@ export interface LightState {
   diffusion: string;
   beam: number;          // gradi (spot)
   softness: number;      // 0-1 morbidezza (dimensione apparente della sorgente)
+  virtualLm?: number;    // solo interno: flusso della sorgente virtuale su un telaio di diffusione
   size: [number, number];// dimensioni (area)
   barnDoors: { top: number; bottom: number; left: number; right: number }; // gradi di chiusura 0-90
   on: boolean;
   origin: 'letta' | 'aggiunta' | 'finestra';
+  attached?: string;     // id dell'arredo (lampada) a cui appartiene
+  windowId?: string;     // id dell'apertura (finestre della stanza costruita)
 }
 
 let _id = 0;
@@ -263,3 +268,13 @@ export const fmtStop = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1).rep
 export function nearestStop(n: number) {
   return FSTOPS.reduce((a, b) => (Math.abs(Math.log2(b / n)) < Math.abs(Math.log2(a / n)) ? b : a));
 }
+
+// look di camera (come una LUT sul monitor): stesso ordine dello shader
+export const LOOKS = [
+  { id: 'neutro', name: 'Neutro' },
+  { id: 'pellicola', name: 'Pellicola' },
+  { id: 'teal', name: 'Teal & orange' },
+  { id: 'bleach', name: 'Bleach bypass' },
+  { id: 'bn', name: 'B/N' },
+  { id: 'notte', name: 'Notte americana' },
+];

@@ -1,0 +1,261 @@
+// Stanza costruita a mano: schermata iniziale, pannello Stanza, schede di arredi e aperture.
+import { useEffect, useState } from 'react';
+import { useStore } from '../store';
+import { eng } from '../engineRef';
+import Pop from './Pop';
+import { Svg, Del } from './icons';
+import { edgePoint } from './Handles';
+import { TEMPLATES, Template, createRoom, updateRoom, addOpening, updateOpening, addFurniture, moveFurniture, duplicateFurniture, removeFurniture, removeOpening } from '../build';
+import { ALL_FURNITURE, CATEGORIES, FINISHES, furnitureKind } from '../engine/furniture';
+import { WALL_FINISHES, FLOORS, OPENING_KINDS, WALLS, RoomSpec, OutdoorKind } from '../engine/room';
+import { OUTDOORS } from '../engine/outdoor';
+import { stopsLabel } from '../export/exports';
+import { TOUCH } from './touch';
+
+const fmtM = (v: number) => `${v.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 2 })} m`;
+
+const OPENING_ICONS: Record<string, string> = {
+  finestra: '<rect x="5" y="4" width="14" height="12"/><path d="M12 4v12M5 10h14M4 19h16"/>',
+  portafinestra: '<rect x="6" y="3" width="12" height="18"/><path d="M12 3v18M6 11h12"/>',
+  porta: '<rect x="7" y="3" width="10" height="18"/><path d="M14.5 12h.01"/>',
+};
+
+// esterni: un segno del luogo al posto della pianta
+const OUTDOOR_ICONS: Record<OutdoorKind, string> = {
+  deserto: '<path d="M3 25c5-6 9-8 14-4 3-5 9-7 16-1" /><path d="M3 30c6-3 12-3 18 0s9 2 12 0" /><circle cx="25" cy="9" r="3"/>',
+  spiaggia: '<circle cx="18" cy="12" r="3.2"/><path d="M3 19h30" /><path d="M3 24c3-2 6-2 9 0s6 2 9 0 6-2 9 0 3 1 3 1" /><path d="M3 29c3-2 6-2 9 0s6 2 9 0 6-2 9 0" />',
+  citta: '<path d="M4 31V12h7v19M11 31V6h8v25M19 31V14h6v17M25 31V9h7v22" /><path d="M7 16h1M7 21h1M14 10h1M14 15h1M14 20h1M28 13h1M28 18h1M22 18h0" />',
+};
+
+function planIcon(t: Template) {
+  if (t.room.outdoor) return OUTDOOR_ICONS[t.room.outdoor];
+  const { width: W, depth: D } = t.room;
+  const s = 30 / Math.max(W, D);
+  const w = W * s, d = D * s, x0 = (36 - w) / 2, y0 = (36 - d) / 2;
+  let out = `<rect x="${x0}" y="${y0}" width="${w}" height="${d}" rx="1"/>`;
+  for (const [kind, x, z, rot] of t.furniture) {
+    const k = furnitureKind(kind);
+    if (k.ceiling || k.onTop || k.flat || k.wall != null) continue;
+    const cx = x0 + (x + W / 2) * s, cy = y0 + (z + D / 2) * s;
+    out += `<rect x="${cx - (k.size[0] * s) / 2}" y="${cy - (k.size[1] * s) / 2}" width="${k.size[0] * s}" height="${k.size[1] * s}" rx=".6" transform="rotate(${-rot} ${cx} ${cy})" fill="currentColor" fill-opacity=".25" stroke-width=".8"/>`;
+  }
+  for (const p of t.people || []) out += `<circle cx="${x0 + (p.x + W / 2) * s}" cy="${y0 + (p.z + D / 2) * s}" r="1.8" fill="currentColor"/>`;
+  return out;
+}
+
+export function Start({ onOpen }: { onOpen: () => void }) {
+  const room = useStore((s) => s.room);
+  return (
+    <div id="start">
+      <div className="brand">Light Simulator</div>
+      <h1>Scegli il set</h1>
+      <p>Poi cambi misure, pareti, finestre e arredi, metti persone e luci, e scatti il render.</p>
+      <div className="tiles">
+        {TEMPLATES.map((t) => (
+          <button key={t.id} className="tile" onClick={() => createRoom(t)}>
+            <svg viewBox="0 0 36 36" dangerouslySetInnerHTML={{ __html: planIcon(t) }} />
+            <b>{t.name}</b>
+            <span className="num">{t.room.outdoor ? 'Esterno' : `${t.room.width.toLocaleString('it-IT')} × ${t.room.depth.toLocaleString('it-IT')} m`}</span>
+          </button>
+        ))}
+      </div>
+      <div className="links">
+        {room && <button className="alt" onClick={() => useStore.setState({ phase: 'ready' })}>Torna alla stanza</button>}
+        <button className="alt" onClick={onOpen}>Apri un progetto salvato</button>
+      </div>
+    </div>
+  );
+}
+
+function dockAnchor() {
+  const d = document.getElementById('dock');
+  const r = d?.getBoundingClientRect();
+  return { x: r ? r.left + r.width / 2 : innerWidth / 2, bottom: r ? innerHeight - r.top + 12 : 96 };
+}
+
+function Slider({ label, value, min, max, step = 0.05, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (v: number) => void }) {
+  return (
+    <div className="row">
+      <div className="k"><span>{label}</span><b className="num">{fmtM(value)}</b></div>
+      <input type="range" min={min} max={max} step={step} value={value} onPointerDown={() => useStore.getState().snapshot()} onChange={(e) => onChange(+e.target.value)} />
+    </div>
+  );
+}
+
+let lastCat = 'sedute';
+
+export function RoomPanel({ onClose }: { onClose: () => void }) {
+  const room = useStore((s) => s.room);
+  const [tab, setTab] = useState<'arredi' | 'stanza'>('arredi');
+  const [cat, setCat] = useState(lastCat);
+  const a = dockAnchor();
+  if (!room) return null;
+  const up = (p: Partial<RoomSpec>) => updateRoom(p, false);
+  return (
+    <Pop x={a.x} y={0} bottom={a.bottom} anchor="above" width={372} onClose={onClose}>
+      <div className="seg">
+        <button className={tab === 'arredi' ? 'on' : ''} onClick={() => setTab('arredi')}>Arredi</button>
+        <button className={tab === 'stanza' ? 'on' : ''} onClick={() => setTab('stanza')}>{room.outdoor ? 'Luogo' : 'Stanza'}</button>
+      </div>
+      {tab === 'arredi' ? (
+        <>
+          <div className="cats" onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}>
+            {CATEGORIES.map((c) => <button key={c.id} className={`chip ${cat === c.id ? 'on' : ''}`} onClick={() => { lastCat = c.id; setCat(c.id); }}>{c.name}</button>)}
+          </div>
+          <div className="catalog" key={cat}>
+            {ALL_FURNITURE.filter((k) => k.cat === cat).map((k) => (
+              <button key={k.id} className="item" onClick={() => { addFurniture(k.id); onClose(); }}>
+                {k.model ? <img src={`${import.meta.env.BASE_URL}catalog/th/${k.model}.webp`} alt="" loading="lazy" draggable={false} /> : <span className="ic"><Svg d={k.icon} /></span>}
+                <span>{k.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="hint">{room.outdoor && cat === 'pareti' ? (room.outdoor === 'citta' ? 'Va sulla facciata più vicina. Trascinalo per spostarlo lungo la strada.' : 'Qui non ci sono pareti: quadri e specchi vanno in centro città, sulle facciate.') : room.outdoor && cat === 'luci' ? 'Le lampade a soffitto all\'aperto non si possono appendere; quelle da terra e da tavolo sì.' : cat === 'pareti' ? 'Va sulla parete che stai guardando. Trascinalo per spostarlo lungo le pareti.' : cat === 'luci' ? 'Le lampade fanno luce vera: regolala nel pannello Luci.' : cat === 'set' ? 'Bandiere, telai e pannelli cambiano davvero la luce nello scatto: tolgono, rimbalzano o diffondono.' : cat === 'decoro' ? 'Si appoggia sul mobile più vicino, se c\'è.' : 'Compare davanti a te. Toccalo per sceglierlo, poi trascinalo dove vuoi.'}</div>
+        </>
+      ) : room.outdoor ? (
+        <>
+          <div className="row">
+            <div className="k"><span>Luogo</span></div>
+            <div className="chips">
+              {OUTDOORS.map((o) => <button key={o.id} className={`chip ${room.outdoor === o.id ? 'on' : ''}`} onClick={() => { if (room.outdoor === o.id) return; useStore.getState().snapshot(); up({ outdoor: o.id, ...(o.id === 'citta' ? { width: 14 } : room.outdoor === 'citta' ? { width: o.id === 'deserto' ? 24 : 20 } : {}) }); if (OUTDOORS.some((x) => x.name === useStore.getState().placeName)) useStore.setState({ placeName: o.name }); }}>{o.name}</button>)}
+            </div>
+            <div className="hint">{OUTDOORS.find((o) => o.id === room.outdoor)?.ground}. Sole e cielo illuminano tutto il set.</div>
+          </div>
+          {room.outdoor !== 'citta' && <Slider label="Larghezza del set" value={room.width} min={6} max={40} step={0.5} onChange={(v) => up({ width: v })} />}
+          <Slider label="Profondità del set" value={room.depth} min={6} max={30} step={0.5} onChange={(v) => up({ depth: v })} />
+          <div className="hint" style={{ marginBottom: 0 }}>{room.outdoor === 'citta' ? 'Il set va da una facciata all\'altra della strada: persone e arredi restano tra i palazzi.' : 'È l\'area in cui stanno persone e arredi; il paesaggio continua fino all\'orizzonte.'}</div>
+        </>
+      ) : (
+        <>
+          <Slider label="Larghezza" value={room.width} min={2} max={16} onChange={(v) => up({ width: v })} />
+          <Slider label="Profondità" value={room.depth} min={2} max={16} onChange={(v) => up({ depth: v })} />
+          <Slider label="Altezza" value={room.height} min={2.2} max={6} onChange={(v) => up({ height: v })} />
+          <div className="row">
+            <div className="k"><span>Pareti</span></div>
+            <div className="chips">
+              {WALL_FINISHES.map((w) => (
+                <button key={w.id} className={`chip sw ${room.wall === w.id ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); up({ wall: w.id }); }}>
+                  <i style={{ background: w.texture === 'mattoni' ? 'linear-gradient(#9b4a33 0 45%,#c9bfb2 45% 55%,#9b4a33 55%)' : w.color }} />{w.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="row">
+            <div className="k"><span>Pavimento</span></div>
+            <div className="chips">
+              {FLOORS.map((f) => <button key={f.id} className={`chip ${room.floor === f.id ? 'on' : ''}`} onClick={() => { useStore.getState().snapshot(); up({ floor: f.id }); }}>{f.name}</button>)}
+            </div>
+          </div>
+          <div className="row" style={{ marginBottom: 0 }}>
+            <div className="k"><span>Aggiungi sulla parete che guardi</span></div>
+            <div className="types four" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
+              {OPENING_KINDS.map((o) => <button key={o.id} className="type" onClick={() => { addOpening(o.id); onClose(); }}><Svg d={OPENING_ICONS[o.id]} />{o.name}</button>)}
+            </div>
+          </div>
+        </>
+      )}
+    </Pop>
+  );
+}
+
+function useAnchor(pos: [number, number, number] | undefined, key: string) {
+  const [xy, setXy] = useState({ x: innerWidth / 2, y: innerHeight / 2 });
+  useEffect(() => {
+    if (!eng() || !pos) return;
+    const p = edgePoint(pos);
+    setXy({ x: p.x, y: p.y });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return xy;
+}
+
+export function FurnitureCard({ id }: { id: string }) {
+  const f = useStore((s) => s.furniture.find((x) => x.id === id));
+  const light = useStore((s) => s.lights.find((l) => l.attached === id));
+  const k = f ? furnitureKind(f.kind) : null;
+  const xy = useAnchor(f ? [f.position[0], (f.position[1] || 0) + Math.min(1.2, k!.height * 0.7), f.position[2]] : undefined, id);
+  if (!f || !k) return null;
+  const st = useStore.getState;
+  const rot = (d: number) => { st().snapshot(); moveFurniture(id, { rotationY: (((f.rotationY + d) % 360) + 360) % 360 }); };
+  return (
+    <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
+      <h3><span>{k.name}</span><div className="acts">{light && <div className={`toggle ${light.on ? 'on' : ''}`} title="Accesa" onClick={() => { st().snapshot(); st().updateLight(light.id, { on: !light.on }); }} />}<Del onClick={() => removeFurniture(id)} /></div></h3>
+      {k.finishes.length > 0 && <div className="row">
+        <div className="k"><span>Finitura</span></div>
+        <div className="chips">
+          {k.finishes.map((c) => (
+            <button key={c} className={`chip sw ${f.color === c ? 'on' : ''}`} onClick={() => { st().snapshot(); st().updateFurniture(id, { color: c }); }}>
+              <i style={{ background: FINISHES[c].kind === 'legno' ? (c === 'noce' ? '#5c3c26' : '#b69268') : FINISHES[c].color }} />{FINISHES[c].name}
+            </button>
+          ))}
+        </div>
+      </div>}
+      {k.wall != null && <Slider label="Altezza da terra" value={f.position[1]} min={0.1} max={2.6} onChange={(v) => moveFurniture(id, { position: [f.position[0], v, f.position[2]] })} />}
+      {k.wall == null && <div className="row">
+        <div className="k"><span>Rotazione</span><b className="num">{Math.round(f.rotationY)}°</b></div>
+        <div className="rotrow">
+          <button className="btn" onClick={() => rot(90)} title="Gira a sinistra">↺ 90°</button>
+          <input type="range" min={0} max={359} step={5} value={((f.rotationY % 360) + 360) % 360} onPointerDown={() => st().snapshot()} onChange={(e) => moveFurniture(id, { rotationY: +e.target.value })} />
+          <button className="btn" onClick={() => rot(-90)} title="Gira a destra">↻ 90°</button>
+        </div>
+      </div>}
+      {light && (
+        <div className="row">
+          <div className="k"><span>Luce</span><b className="num">{light.on ? `${stopsLabel(light.stops)} · ${light.kelvin} K` : 'spenta'}</b></div>
+          <button className="btn" onClick={() => useStore.setState({ selection: { type: 'light', id: light.id } })}>Regola la luce</button>
+        </div>
+      )}
+      <div className="hint">{k.wall != null ? (useStore.getState().room?.outdoor ? 'Trascinalo per spostarlo lungo la facciata.' : 'Trascinalo per spostarlo lungo le pareti.') : TOUCH ? 'Trascinalo per spostarlo.' : 'Trascinalo per spostarlo. R lo gira di 90°, Canc lo toglie.'}</div>
+      <div className="hr" />
+      <button className="more" onClick={() => duplicateFurniture(id)}>Duplica</button>
+    </Pop>
+  );
+}
+
+export function OpeningCard({ id }: { id: string }) {
+  const room = useStore((s) => s.room);
+  const o = room?.openings.find((x) => x.id === id);
+  const pos = (() => {
+    if (!room || !o) return undefined;
+    const w = WALLS.find((x) => x.id === o.wall);
+    if (!w) return undefined;
+    const W = room.width, D = room.depth;
+    const p: [number, number, number] = o.wall === 'fondo' ? [o.offset, o.sill + o.height / 2, -D / 2] : o.wall === 'davanti' ? [-o.offset, o.sill + o.height / 2, D / 2] : o.wall === 'sinistra' ? [-W / 2, o.sill + o.height / 2, -o.offset] : [W / 2, o.sill + o.height / 2, o.offset];
+    return p;
+  })();
+  const xy = useAnchor(pos, id);
+  if (!room || !o) return null;
+  const st = useStore.getState;
+  const up = (p: any, snap = false) => updateOpening(id, p, snap);
+  const name = OPENING_KINDS.find((k) => k.id === o.kind)?.name || '';
+  return (
+    <Pop x={xy.x} y={xy.y} onClose={() => useStore.setState({ selection: null })}>
+      <h3><span>{name}{o.kind !== 'porta' && o.closed ? ' · oscurata' : ''}</span><div className="acts">{o.kind !== 'porta' && <div className={`toggle ${o.closed ? '' : 'on'}`} title={o.closed ? 'Apri' : 'Chiudi l\'oscurante'} onClick={() => up({ closed: !o.closed }, true)} />}<Del onClick={() => removeOpening(id)} /></div></h3>
+      {o.kind !== 'porta' && <div className="hint" style={{ marginBottom: 12 }}>{o.closed ? 'Oscurante chiuso: da qui non entra luce. Con tutte le finestre chiuse la stanza è al buio.' : 'Aperta: entrano sole e cielo. L\'interruttore chiude l\'oscurante.'}</div>}
+      <div className="row">
+        <div className="types four" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
+          {OPENING_KINDS.map((k) => <button key={k.id} className={`type ${o.kind === k.id ? 'on' : ''}`} onClick={() => up({ kind: k.id, width: k.width, height: k.height, sill: k.sill }, true)}><Svg d={OPENING_ICONS[k.id]} />{k.name}</button>)}
+        </div>
+      </div>
+      <div className="row">
+        <div className="k"><span>Parete</span></div>
+        <div className="chips">{WALLS.map((w) => <button key={w.id} className={`chip ${o.wall === w.id ? 'on' : ''}`} onClick={() => up({ wall: w.id, offset: 0 }, true)}>{w.name}</button>)}</div>
+      </div>
+      <div className="row">
+        <div className="k"><span>Larghezza</span><b className="num">{fmtM(o.width)}</b></div>
+        <input type="range" min={0.5} max={6} step={0.05} value={o.width} onPointerDown={() => st().snapshot()} onChange={(e) => up({ width: +e.target.value })} />
+      </div>
+      <div className="row">
+        <div className="k"><span>Altezza</span><b className="num">{fmtM(o.height)}</b></div>
+        <input type="range" min={0.5} max={room.height - 0.1} step={0.05} value={o.height} onPointerDown={() => st().snapshot()} onChange={(e) => up({ height: +e.target.value })} />
+      </div>
+      {o.kind === 'finestra' && (
+        <div className="row">
+          <div className="k"><span>Davanzale</span><b className="num">{fmtM(o.sill)}</b></div>
+          <input type="range" min={0.2} max={Math.max(0.3, room.height - o.height - 0.1)} step={0.05} value={o.sill} onPointerDown={() => st().snapshot()} onChange={(e) => up({ sill: +e.target.value })} />
+        </div>
+      )}
+      <div className="hint">Trascinala per spostarla lungo la parete. {o.kind !== 'porta' ? "Da qui entrano il sole e il cielo: l'ora si cambia in alto a destra." : ''}</div>
+    </Pop>
+  );
+}
